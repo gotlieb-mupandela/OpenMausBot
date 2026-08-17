@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Bot, MessageSquare, Monitor, Puzzle, Settings, Sparkles, User } from "lucide-react";
 import { MausAvatar } from "./Avatar";
 import { track } from "@/lib/analytics";
 import { useMobileNav } from "@/lib/mobile-nav";
+import { useStore } from "@/state/store";
 import type { SaasUser } from "./AuthScreen";
 
 type Step = {
@@ -18,15 +19,8 @@ const STEPS: Step[] = [
   {
     id: "welcome",
     title: "Welcome to Aishe",
-    body: "Your AI bot team lives in the cloud — each bot gets its own personality, tools, and a real computer. This quick tour shows you around.",
+    body: "Your AI bot team lives in the cloud — each bot gets its own personality, tools, and a real computer. Let's make your first one.",
     icon: <Sparkles size={22} className="text-accent" />,
-  },
-  {
-    id: "bots",
-    title: "Your bot team",
-    body: "Every bot is a separate chat. Switch between them here — each one remembers its own work and style.",
-    icon: <Bot size={22} className="text-accent" />,
-    target: '[data-tour="sidebar-bots"]',
   },
   {
     id: "new-bot",
@@ -34,6 +28,13 @@ const STEPS: Step[] = [
     body: "Tap + to spin up a teammate. Each bot is its own chat, memory, and style.",
     icon: <Bot size={22} className="text-accent" />,
     target: '[data-tour="new-bot"]',
+  },
+  {
+    id: "bots",
+    title: "Your bot team",
+    body: "Every bot is a separate chat. Switch between them here — each one remembers its own work and style.",
+    icon: <Bot size={22} className="text-accent" />,
+    target: '[data-tour="sidebar-bots"]',
   },
   {
     id: "chat",
@@ -144,9 +145,14 @@ function TooltipCard({
   onSkip: () => void;
   busy: boolean;
 }) {
-  const centered = !rect;
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [cardH, setCardH] = useState(220);
+
   const card = (
-    <div className="w-full max-w-[380px] rounded-2xl border border-white/10 bg-[#141414] p-5 shadow-2xl shadow-black/60">
+    <div
+      ref={cardRef}
+      className="w-full max-w-[380px] max-h-[calc(100dvh-24px)] overflow-y-auto rounded-2xl border border-white/10 bg-[#141414] p-5 shadow-2xl shadow-black/60"
+    >
       <div className="flex items-start gap-2.5">
         <span className="mt-0.5 shrink-0">{step.icon}</span>
         <div className="min-w-0">
@@ -180,7 +186,11 @@ function TooltipCard({
     </div>
   );
 
-  if (centered) {
+  useLayoutEffect(() => {
+    if (cardRef.current) setCardH(cardRef.current.offsetHeight);
+  }, [step.title, step.body, index, rect]);
+
+  if (!rect) {
     return (
       <div className="fixed inset-0 z-[101] flex items-center justify-center bg-black/72 p-4">
         {card}
@@ -188,19 +198,24 @@ function TooltipCard({
     );
   }
 
-  const below = rect.top + rect.height + 16 + 200 < window.innerHeight;
-  const left = Math.min(Math.max(rect.left, 12), window.innerWidth - 392);
-  const topAbove = Math.max(12, rect.top - 16);
-  const topBelow = rect.top + rect.height + 16;
+  const margin = 12;
+  const gap = 16;
+  const width = Math.min(380, window.innerWidth - margin * 2);
+  const spaceBelow = window.innerHeight - rect.bottom - gap - margin;
+  const spaceAbove = rect.top - gap - margin;
+  const below = spaceBelow >= cardH || spaceBelow >= spaceAbove;
+  const unclamped = below ? rect.bottom + gap : rect.top - gap - cardH;
+  const maxTop = Math.max(margin, window.innerHeight - cardH - margin);
+  const top = Math.min(Math.max(unclamped, margin), maxTop);
+  const left = Math.min(Math.max(rect.left, margin), window.innerWidth - width - margin);
 
   return (
     <div
-      className="fixed z-[101] px-3"
+      className="fixed z-[101]"
       style={{
-        top: below ? topBelow : topAbove,
+        top,
         left,
-        width: Math.min(380, window.innerWidth - 24),
-        transform: below ? undefined : "translateY(-100%)",
+        width,
       }}
     >
       {card}
@@ -215,11 +230,15 @@ export function SaasOnboarding({
   user: SaasUser;
   onDone: (updated: SaasUser) => void;
 }) {
+  const { state, dispatch } = useStore();
+  const hasBot = state.bots.some((b) => !b.hidden);
+  const startedEmpty = useRef(!hasBot);
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
   const { openList, closeList } = useMobileNav();
   const current = STEPS[step]!;
-  const rect = useTargetRect(current.target, step);
+  const wizardOpen = state.newBotWizardOpen;
+  const rect = useTargetRect(wizardOpen ? undefined : current.target, step);
 
   useEffect(() => {
     track("saas_onboarding_step", { step: step + 1, id: current.id });
@@ -233,6 +252,14 @@ export function SaasOnboarding({
     if (id === "bots" || id === "new-bot" || id === "plugins" || id === "account") openList();
     if (id === "chat" || id === "settings" || id === "computer") closeList();
   }, [step, current.id, openList, closeList]);
+
+  // After a first-run create, skip the leftover "tap +" card and continue the tour.
+  useEffect(() => {
+    if (current.id !== "new-bot") return;
+    if (!startedEmpty.current || !hasBot) return;
+    const nextIdx = STEPS.findIndex((s) => s.id === "bots");
+    setStep(nextIdx >= 0 ? nextIdx : step + 1);
+  }, [current.id, hasBot, step]);
 
   const finish = useCallback(async () => {
     setBusy(true);
@@ -253,6 +280,11 @@ export function SaasOnboarding({
   }, [onDone, user]);
 
   const next = () => {
+    if (step === 0 && !hasBot) {
+      dispatch({ type: "toggleNewBotWizard", open: true });
+      setStep(1);
+      return;
+    }
     if (step >= STEPS.length - 1) void finish();
     else setStep((s) => s + 1);
   };
@@ -260,16 +292,27 @@ export function SaasOnboarding({
   const firstName = user.name.trim().split(/\s+/)[0] || "there";
   const welcomeBody =
     step === 0
-      ? `Hey ${firstName}! Your AI bot team lives in the cloud — each bot gets its own personality, tools, and a real computer. This quick tour shows you around.`
+      ? hasBot
+        ? `Hey ${firstName}! Your AI bot team lives in the cloud — each bot gets its own personality, tools, and a real computer. This quick tour shows you around.`
+        : `Hey ${firstName}! Your AI bot team lives in the cloud. Let's create your first bot — pick a name, a look, and what it's for.`
       : current.body;
 
   const displayStep = step === 0 ? { ...current, body: welcomeBody } : current;
+  const firstBotStep: Step = {
+    ...STEPS.find((s) => s.id === "new-bot")!,
+    title: "Create your first bot",
+    body: "Give it a name and a look. Each bot is its own chat, memory, and style — you can add more later.",
+  };
+  const showNewBotCopy = current.id === "new-bot" && startedEmpty.current && !hasBot;
+
+  // Don't flash the leftover "+" tooltip while the first bot is landing.
+  if (wizardOpen || (current.id === "new-bot" && startedEmpty.current && hasBot)) return null;
 
   return (
     <>
       {step === 0 && (
         <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/72 p-4">
-          <div className="flex w-full max-w-[400px] flex-col items-center rounded-2xl border border-hairline/40 bg-panel p-6 sm:p-8">
+          <div className="flex max-h-[min(90dvh,640px)] w-full max-w-[400px] flex-col items-center overflow-y-auto rounded-2xl border border-hairline/40 bg-panel p-6 sm:p-8">
             <MausAvatar color="blue" state="happy" size={72} />
             <h1 className="mt-4 text-center text-[20px] font-semibold text-ink">{displayStep.title}</h1>
             <p className="mt-2 text-center text-[14px] leading-relaxed text-ink-secondary">{displayStep.body}</p>
@@ -277,7 +320,7 @@ export function SaasOnboarding({
               onClick={next}
               className="mt-5 w-full rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white hover:brightness-110"
             >
-              Start tour
+              {hasBot ? "Start tour" : "Create my first bot"}
             </button>
             <button
               onClick={() => void finish()}
@@ -295,7 +338,7 @@ export function SaasOnboarding({
           {!rect && <div className="fixed inset-0 z-[100] bg-black/72" />}
           {rect && <Spotlight rect={rect} />}
           <TooltipCard
-            step={displayStep}
+            step={showNewBotCopy ? firstBotStep : displayStep}
             index={step}
             total={STEPS.length}
             rect={rect}
@@ -308,7 +351,7 @@ export function SaasOnboarding({
 
       {step === STEPS.length - 1 && (
         <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/72 p-4">
-          <div className="flex w-full max-w-[400px] flex-col items-center rounded-2xl border border-hairline/40 bg-panel p-6 sm:p-8">
+          <div className="flex max-h-[min(90dvh,640px)] w-full max-w-[400px] flex-col items-center overflow-y-auto rounded-2xl border border-hairline/40 bg-panel p-6 sm:p-8">
             <MausAvatar color="blue" state="celebrate" size={72} />
             <h1 className="mt-4 text-center text-[20px] font-semibold text-ink">{current.title}</h1>
             <p className="mt-2 text-center text-[14px] leading-relaxed text-ink-secondary">{current.body}</p>

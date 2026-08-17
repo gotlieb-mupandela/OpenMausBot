@@ -1,21 +1,30 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ChevronLeft, Loader2, Monitor, Square } from "lucide-react";
 import { useStore, formatTime, type Bot, type Message } from "@/state/store";
 import { MausAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
-import { ChatMarkdown } from "./ChatMarkdown";
 import { OptionCard } from "./OptionCard";
 import { Composer } from "./Composer";
 import { ModelPicker } from "./ModelPicker";
 import { cn } from "@/lib/cn";
 import { useMobileNav } from "@/lib/mobile-nav";
 
+const ChatMarkdown = lazy(() => import("./ChatMarkdown").then((m) => ({ default: m.ChatMarkdown })));
+
+function BotMarkdown({ text, streaming }: { text: string; streaming?: boolean }) {
+  return (
+    <Suspense fallback={<div className="whitespace-pre-wrap break-words">{text}</div>}>
+      <ChatMarkdown text={text} streaming={streaming} />
+    </Suspense>
+  );
+}
+
 /** Long user messages collapse behind a fade so pasted walls of text don't
  * bury the conversation; bots get full markdown. */
 const USER_COLLAPSE_CHARS = 600;
 const USER_COLLAPSE_LINES = 8;
 
-function Bubble({ message }: { message: Message }) {
+const Bubble = memo(function Bubble({ message }: { message: Message }) {
   const user = message.role === "user";
   const [expanded, setExpanded] = useState(false);
   const text = message.text ?? "";
@@ -43,14 +52,14 @@ function Bubble({ message }: { message: Message }) {
             )}
           </>
         ) : (
-          <ChatMarkdown text={text} />
+          <BotMarkdown text={text} />
         )}
       </div>
     </div>
   );
-}
+});
 
-function ScreenFrame({ png, mime, live }: { png: string; mime?: string; live?: boolean }) {
+const ScreenFrame = memo(function ScreenFrame({ png, mime, live }: { png: string; mime?: string; live?: boolean }) {
   return (
     <div className="flex justify-start">
       <div
@@ -75,13 +84,13 @@ function ScreenFrame({ png, mime, live }: { png: string; mime?: string; live?: b
       </div>
     </div>
   );
-}
+});
 
 function StreamingBubble({ text }: { text: string }) {
   return (
     <div className="flex w-full justify-start">
       <div className="max-w-[min(85%,28rem)] rounded-2xl bg-card px-3.5 py-2.5 text-[15px] leading-relaxed text-ink sm:max-w-[70%] sm:px-4">
-        <ChatMarkdown text={text} streaming />
+        <BotMarkdown text={text} streaming />
         <span className="ml-0.5 inline-block h-[14px] w-[2px] animate-pulse bg-ink-secondary align-middle" />
       </div>
     </div>
@@ -168,10 +177,29 @@ export function ChatView({ bot }: { bot: Bot }) {
     });
   };
 
-  useEffect(() => setFollow(true), [bot.id]);
+  const unansweredOnboarding =
+    bot.messages.length <= 2 &&
+    bot.messages.some((m) => m.kind === "options" && m.card && !m.card.answered && !m.card.dismissed);
+
   useEffect(() => {
+    setFollow(!unansweredOnboarding);
+  }, [bot.id, unansweredOnboarding]);
+  useEffect(() => {
+    if (bot.busy || streaming) setFollow(true);
+  }, [bot.busy, streaming, bot.id]);
+  useEffect(() => {
+    if (unansweredOnboarding) {
+      const el = scrollRef.current;
+      if (!el) return;
+      sticking.current = true;
+      el.scrollTop = 0;
+      requestAnimationFrame(() => {
+        sticking.current = false;
+      });
+      return;
+    }
     if (follow) stickToBottom();
-  }, [bot.id, feed.length, streaming, bot.busy, liveScreen?.png, follow]);
+  }, [bot.id, feed.length, streaming, bot.busy, liveScreen?.png, follow, unansweredOnboarding]);
 
   // Viewing this chat clears the unread badge (including after a turn finishes).
   useEffect(() => {

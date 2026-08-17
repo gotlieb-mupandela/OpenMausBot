@@ -86,11 +86,13 @@ function CodeBlock({ code, lang, streaming }: { code: string; lang: string; stre
   );
 }
 
+const REMARK_PLUGINS = [remarkGfm];
+
 function ChatMarkdownComponent({ text, streaming = false }: { text: string; streaming?: boolean }) {
   return (
     <div className="chat-md min-w-0 [&>*+*]:mt-2">
       <Markdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={REMARK_PLUGINS}
         components={{
           pre({ children }) {
             // fenced code arrives as <pre><code class="language-x">…</code></pre>

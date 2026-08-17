@@ -1,6 +1,7 @@
 // Aishe server — the harness host. Clients hold no transports
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
+import { gzipSync } from "node:zlib";
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -18,7 +19,7 @@ import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { mentionedBots, type Message } from "./store.ts";
 import { SAAS_MODE, SAAS_HOST } from "./saas/mode.ts";
-import { MAX_MESSAGES_PER_THREAD, trimThreadMessages, turnGate } from "./saas/capacity.ts";
+import { MAX_MESSAGES_PER_THREAD, stripScreenPayloads, trimThreadMessages, turnGate } from "./saas/capacity.ts";
 import * as auth from "./saas/auth.ts";
 import * as google from "./saas/google.ts";
 import * as polar from "./saas/polar.ts";
@@ -43,6 +44,15 @@ ensureDirs();
 const cfg = loadConfig();
 const registry = new ProviderRegistry(BUILT_IN_DRIVERS);
 await registry.load(instanceConfigs(cfg));
+
+let describeCache: { at: number; value: Awaited<ReturnType<ProviderRegistry["describe"]>> } | null = null;
+const DESCRIBE_TTL_MS = 8_000;
+async function describeCached() {
+  if (describeCache && Date.now() - describeCache.at < DESCRIBE_TTL_MS) return describeCache.value;
+  const value = await registry.describe();
+  describeCache = { at: Date.now(), value };
+  return value;
+}
 
 const bus = new EventBus();
 bus.attach(registry.instances());
@@ -666,6 +676,7 @@ function configStatus() {
 /** Rebuild the provider fleet after a config change so new keys take
  * effect without a server restart (kills any in-flight turns). */
 async function reloadProviders() {
+  describeCache = null;
   bus.detachAll();
   await registry.disposeAll();
   await registry.load(instanceConfigs(cfg));
@@ -674,9 +685,69 @@ async function reloadProviders() {
 
 // ── HTTP plumbing ─────────────────────────────────────────────────────
 function json(res: ServerResponse, status: number, body: unknown) {
-  const data = JSON.stringify(body);
-  res.writeHead(status, { "content-type": "application/json" });
+  const raw = Buffer.from(JSON.stringify(body));
+  const headers: Record<string, string> = { "content-type": "application/json; charset=utf-8" };
+  const accept = String(res.req?.headers["accept-encoding"] ?? "");
+  let data: Buffer = raw;
+  if (raw.length > 512 && /\bgzip\b/.test(accept)) {
+    data = gzipSync(raw);
+    headers["content-encoding"] = "gzip";
+    headers.vary = "accept-encoding";
+  }
+  headers["content-length"] = String(data.length);
+  res.writeHead(status, headers);
   res.end(data);
+}
+
+const GZIP_STATIC = new Set([".js", ".css", ".html", ".svg", ".json", ".txt", ".ico"]);
+const staticCache = new Map<string, { type: string; raw: Buffer; gz: Buffer | null }>();
+
+function loadStaticFile(abs: string, type: string) {
+  let hit = staticCache.get(abs);
+  if (!hit) {
+    const raw = readFileSync(abs);
+    const gz = GZIP_STATIC.has(extname(abs)) && raw.length > 512 ? gzipSync(raw) : null;
+    hit = { type, raw, gz };
+    staticCache.set(abs, hit);
+  }
+  return hit;
+}
+
+function sendStatic(
+  res: ServerResponse,
+  hit: { type: string; raw: Buffer; gz: Buffer | null },
+  immutable: boolean,
+) {
+  const accept = String(res.req?.headers["accept-encoding"] ?? "");
+  const useGz = Boolean(hit.gz && /\bgzip\b/.test(accept));
+  const headers: Record<string, string> = {
+    "content-type": hit.type,
+    "content-length": String((useGz ? hit.gz! : hit.raw).length),
+    "cache-control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
+  };
+  if (useGz) {
+    headers["content-encoding"] = "gzip";
+    headers.vary = "accept-encoding";
+  }
+  res.writeHead(200, headers);
+  res.end(useGz ? hit.gz : hit.raw);
+}
+
+function serveStatic(res: ServerResponse, urlPath: string) {
+  const root = STATIC_DIR!;
+  const safe = urlPath === "/" ? "/index.html" : urlPath.replace(/\.\./g, "");
+  const file = join(root, safe);
+  const hashed = safe.startsWith("/assets/");
+  try {
+    const type = MIME[extname(file)] ?? "application/octet-stream";
+    return sendStatic(res, loadStaticFile(file, type), hashed);
+  } catch {
+    try {
+      return sendStatic(res, loadStaticFile(join(root, "index.html"), "text/html"), false);
+    } catch {
+      return json(res, 404, { error: `no route: GET ${urlPath}` });
+    }
+  }
 }
 
 function readBody(req: IncomingMessage): Promise<any> {
@@ -759,7 +830,7 @@ const server = createServer(async (req, res) => {
       if (method === "GET" && path === "/api/auth/me") {
         const user = await auth.userFromRequest(req);
         if (!user) return json(res, 401, { error: "unauthorized", mode: "saas" });
-        await tenants.touch(user.id);
+        void tenants.touch(user.id);
         return json(res, 200, { user: auth.toPublic(user), mode: "saas" });
       }
       if (method === "POST" && path === "/api/auth/onboarding-complete") {
@@ -777,7 +848,13 @@ const server = createServer(async (req, res) => {
     }
 
     if (SAAS_MODE && method === "GET" && path === "/api/saas") {
-      return json(res, 200, { mode: "saas", googleAuth: google.googleConfigured() });
+      const user = await auth.userFromRequest(req);
+      if (user) void tenants.touch(user.id);
+      return json(res, 200, {
+        mode: "saas",
+        googleAuth: google.googleConfigured(),
+        user: user ? auth.toPublic(user) : null,
+      });
     }
 
     if (SAAS_MODE && method === "POST" && path === "/api/cron/routines") {
@@ -810,8 +887,14 @@ const server = createServer(async (req, res) => {
     if (SAAS_MODE && path.startsWith("/api/") && !path.startsWith("/api/internal/")) {
       saasUser = await auth.userFromRequest(req);
       if (!saasUser) return json(res, 401, { error: "unauthorized", mode: "saas" });
-      store = await tenants.touch(saasUser.id);
       sseUserId = saasUser.id;
+      const needsStore =
+        path !== "/api/events" &&
+        path !== "/api/instances" &&
+        path !== "/api/config" &&
+        path !== "/api/routines/tick" &&
+        !path.startsWith("/api/billing/");
+      if (needsStore) store = await tenants.touch(saasUser.id);
     }
     const broadcastUser = (payload: unknown) => broadcastTo(sseUserId, payload);
 
@@ -923,7 +1006,7 @@ const server = createServer(async (req, res) => {
       return json(res, 200, {
         bots: store.bots.map((b) => ({
           ...b,
-          messages: trimThreadMessages(store.messagesFor(b.threadId), MAX_MESSAGES_PER_THREAD),
+          messages: stripScreenPayloads(trimThreadMessages(store.messagesFor(b.threadId), MAX_MESSAGES_PER_THREAD)),
         })),
       });
     }
@@ -1061,6 +1144,13 @@ const server = createServer(async (req, res) => {
     }
 
     m = path.match(/^\/api\/bots\/([\w-]+)\/messages$/);
+    if (m && method === "GET") {
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      return json(res, 200, {
+        messages: trimThreadMessages(store.messagesFor(bot.threadId), MAX_MESSAGES_PER_THREAD),
+      });
+    }
     if (m && method === "POST") {
       const body = await readBody(req);
       const text = String(body.text ?? "").trim();
@@ -1098,7 +1188,7 @@ const server = createServer(async (req, res) => {
 
     // ── provider instances (model picker) ──
     if (method === "GET" && path === "/api/instances") {
-      const instances = await registry.describe();
+      const instances = await describeCached();
       if (!SAAS_MODE) return json(res, 200, { instances });
       return json(res, 200, {
         instances: instances.map((row) =>
@@ -1255,22 +1345,7 @@ const server = createServer(async (req, res) => {
     // packaged app: the server serves the built UI too (window → :8799 for
     // everything, no dev proxy to die). OMB_STATIC_DIR is set by Electron.
     if (method === "GET" && !path.startsWith("/api/") && STATIC_DIR) {
-      const safe = path === "/" ? "/index.html" : path.replace(/\.\./g, "");
-      const file = join(STATIC_DIR, safe);
-      try {
-        const data = readFileSync(file);
-        res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
-        return res.end(data);
-      } catch {
-        // SPA fallback
-        try {
-          const data = readFileSync(join(STATIC_DIR, "index.html"));
-          res.writeHead(200, { "content-type": "text/html" });
-          return res.end(data);
-        } catch {
-          /* fall through to 404 */
-        }
-      }
+      return serveStatic(res, path);
     }
 
     return json(res, 404, { error: `no route: ${method} ${path}` });

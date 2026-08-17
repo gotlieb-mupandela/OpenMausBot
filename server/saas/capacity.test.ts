@@ -4,6 +4,7 @@ import {
   MAX_TURNS_PER_USER,
   TurnGate,
   trimThreadMessages,
+  stripScreenPayloads,
 } from "./capacity.ts";
 
 describe("trimThreadMessages", () => {
@@ -18,6 +19,15 @@ describe("trimThreadMessages", () => {
     expect(out).toHaveLength(3);
     expect(out[0].png).toBeUndefined();
     expect(out[2].png).toBe("bbb");
+  });
+
+  it("stripScreenPayloads drops every screenshot body", () => {
+    const out = stripScreenPayloads([
+      { kind: "text" as const, png: undefined },
+      { kind: "screen" as const, png: "keep-me" },
+    ]);
+    expect(out[1].png).toBeUndefined();
+    expect(out[1].kind).toBe("screen");
   });
 });
 

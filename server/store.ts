@@ -294,7 +294,8 @@ export class Store {
     if (this.mirror) this.enqueue(() => this.mirror!.upsertBot(bot));
   }
 
-  /** First-run seed: one bot so the app never opens empty. */
+  /** First-run seed for desktop: one bot so the app never opens empty.
+   *  SaaS tenants stay empty until the user creates their first bot. */
   seedIfEmpty() {
     if (this.bots.length) return;
     const bot = this.createBot();

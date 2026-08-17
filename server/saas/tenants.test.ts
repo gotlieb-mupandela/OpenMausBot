@@ -20,6 +20,13 @@ function cleanupTestTenants() {
 afterEach(() => cleanupTestTenants());
 
 describe("TenantStores cache", () => {
+  it("does not seed a starter bot for SaaS tenants", async () => {
+    cleanupTestTenants();
+    const tenants = new TenantStores(selection);
+    const store = await tenants.forUser("user-empty");
+    expect(store.bots).toHaveLength(0);
+  });
+
   it("evicts idle tenants so at most MAX_CACHED_TENANTS stay in memory", async () => {
     cleanupTestTenants();
     const tenants = new TenantStores(selection);
@@ -34,8 +41,7 @@ describe("TenantStores cache", () => {
     cleanupTestTenants();
     const tenants = new TenantStores(selection);
     const pinned = await tenants.forUser("busy-user");
-    const bot = pinned.bots[0];
-    expect(bot).toBeTruthy();
+    const bot = pinned.createBot();
     pinned.patchBot(bot.id, { busy: true });
     for (let i = 0; i < MAX_CACHED_TENANTS + 4; i++) {
       await tenants.forUser(`other-${i}`);

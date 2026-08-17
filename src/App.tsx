@@ -1,22 +1,55 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState, type ComponentType } from "react";
 import { Loader2 } from "lucide-react";
 import { StoreProvider, useStore } from "@/state/store";
-import { Onboarding } from "@/components/Onboarding";
 import { emailGateDone, initAnalytics } from "@/lib/analytics";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatView } from "@/components/ChatView";
-import { SettingsPanel } from "@/components/SettingsPanel";
-import { PluginsPanel } from "@/components/PluginsPanel";
-import { ComputerPanel } from "@/components/ComputerPanel";
-import { AppSettingsPanel } from "@/components/AppSettingsPanel";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { MobileNavProvider } from "@/lib/mobile-nav";
 import { AuthScreen, type SaasUser } from "@/components/AuthScreen";
-import { NewBotWizard } from "@/components/NewBotWizard";
-import { SaasOnboarding } from "@/components/SaasOnboarding";
-import { BillingSuccess } from "@/components/BillingSuccess";
 import { AccessProvider, useAccess } from "@/lib/access";
 import { PlusFeaturePanel, PlusGate } from "@/components/PlusGate";
+
+const Onboarding = lazy(() =>
+  import("@/components/Onboarding").then((m) => ({ default: m.Onboarding })),
+);
+const SettingsPanel = lazy(() =>
+  import("@/components/SettingsPanel").then((m) => ({ default: m.SettingsPanel })),
+);
+const PluginsPanel = lazy(() =>
+  import("@/components/PluginsPanel").then((m) => ({ default: m.PluginsPanel })),
+);
+const ComputerPanel = lazy(() =>
+  import("@/components/ComputerPanel").then((m) => ({ default: m.ComputerPanel })),
+);
+const AppSettingsPanel = lazy(() =>
+  import("@/components/AppSettingsPanel").then((m) => ({ default: m.AppSettingsPanel })),
+);
+const NewBotWizard = lazy(() =>
+  import("@/components/NewBotWizard").then((m) => ({ default: m.NewBotWizard })),
+);
+const SaasOnboarding = lazy(() =>
+  import("@/components/SaasOnboarding").then((m) => ({ default: m.SaasOnboarding })),
+);
+const BillingSuccess = lazy(() =>
+  import("@/components/BillingSuccess").then((m) => ({ default: m.BillingSuccess })),
+);
+
+function PanelFallback() {
+  return (
+    <div className="flex h-full w-[min(100%,400px)] shrink-0 items-center justify-center bg-panel text-ink-secondary">
+      <Loader2 size={18} className="animate-spin" />
+    </div>
+  );
+}
+
+function lazyPanel<P extends object>(Comp: ComponentType<P>, props: P) {
+  return (
+    <Suspense fallback={<PanelFallback />}>
+      <Comp {...props} />
+    </Suspense>
+  );
+}
 
 function Shell({
   saasMode,
@@ -74,7 +107,7 @@ function Shell({
             )}
           </main>
         )}
-        {state.settingsOpen && bot && <SettingsPanel bot={bot} saasMode={saasMode} />}
+        {state.settingsOpen && bot && lazyPanel(SettingsPanel, { bot, saasMode })}
         {state.computerOpen &&
           bot &&
           (saasMode && !plus ? (
@@ -84,11 +117,10 @@ function Shell({
               onClose={() => dispatch({ type: "toggleComputer", open: false })}
             />
           ) : (
-            <ComputerPanel bot={bot} saasMode={saasMode} />
+            lazyPanel(ComputerPanel, { bot, saasMode })
           ))}
-        {state.appSettingsOpen && (
-          <AppSettingsPanel saasUser={saasUser} onReplayTour={onReplayTour} />
-        )}
+        {state.appSettingsOpen &&
+          lazyPanel(AppSettingsPanel, { saasUser, onReplayTour })}
         {state.pluginsOpen &&
           (saasMode && !plus ? (
             <div
@@ -103,11 +135,13 @@ function Shell({
               </div>
             </div>
           ) : (
-            <PluginsPanel saasMode={saasMode} />
+            lazyPanel(PluginsPanel, { saasMode })
           ))}
       </div>
       {state.newBotWizardOpen && (
-        <NewBotWizard onClose={() => dispatch({ type: "toggleNewBotWizard", open: false })} />
+        <Suspense fallback={null}>
+          <NewBotWizard onClose={() => dispatch({ type: "toggleNewBotWizard", open: false })} />
+        </Suspense>
       )}
     </div>
   );
@@ -140,12 +174,13 @@ export default function App() {
           if (!alive) return;
           setSaasMode(true);
           setSaasBootError(null);
-          const mode = (await modeRes.json().catch(() => ({}))) as { googleAuth?: boolean };
-          if (alive) setGoogleAuth(Boolean(mode.googleAuth));
-          const me = await fetch("/api/auth/me", { credentials: "include" });
-          if (me.ok) {
-            const data = await me.json();
-            if (alive) setSaasUser(data.user);
+          const mode = (await modeRes.json().catch(() => ({}))) as {
+            googleAuth?: boolean;
+            user?: SaasUser | null;
+          };
+          if (alive) {
+            setGoogleAuth(Boolean(mode.googleAuth));
+            if (mode.user) setSaasUser(mode.user);
           }
         } else if (modeRes.status === 404) {
           if (alive) setSaasMode(false);
@@ -156,8 +191,6 @@ export default function App() {
           }
         }
       } catch {
-        // No proxy / harness down: treat as SaaS outage when Vite still proxies,
-        // otherwise desktop. Prefer retry UI over flashing desktop onboarding.
         if (!alive) return;
         try {
           const probe = await fetch("/api/health", { credentials: "include" });
@@ -208,13 +241,21 @@ export default function App() {
 
   if (saasMode && billingSuccess && saasUser) {
     return (
-      <BillingSuccess
-        user={saasUser}
-        onContinue={(updated) => {
-          setSaasUser(updated);
-          window.history.replaceState({}, "", "/");
-        }}
-      />
+      <Suspense
+        fallback={
+          <div className="flex h-full items-center justify-center bg-app text-ink-secondary">
+            <Loader2 size={20} className="animate-spin" />
+          </div>
+        }
+      >
+        <BillingSuccess
+          user={saasUser}
+          onContinue={(updated) => {
+            setSaasUser(updated);
+            window.history.replaceState({}, "", "/");
+          }}
+        />
+      </Suspense>
     );
   }
 
@@ -228,15 +269,21 @@ export default function App() {
           onReplayTour={saasMode ? () => setShowSaasTour(true) : undefined}
         />
         {saasMode && showSaasTour && saasUser && (
-          <SaasOnboarding
-            user={saasUser}
-            onDone={(updated) => {
-              setSaasUser(updated);
-              setShowSaasTour(false);
-            }}
-          />
+          <Suspense fallback={null}>
+            <SaasOnboarding
+              user={saasUser}
+              onDone={(updated) => {
+                setSaasUser(updated);
+                setShowSaasTour(false);
+              }}
+            />
+          </Suspense>
         )}
-        {!saasMode && gated && <Onboarding onDone={() => setGated(false)} />}
+        {!saasMode && gated && (
+          <Suspense fallback={null}>
+            <Onboarding onDone={() => setGated(false)} />
+          </Suspense>
+        )}
       </MobileNavProvider>
       </AccessProvider>
     </StoreProvider>

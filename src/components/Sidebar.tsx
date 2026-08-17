@@ -292,8 +292,8 @@ export function Sidebar({ saasMode = false }: { saasMode?: boolean }) {
       </div>
 
       {/* Bot list */}
-      <div className="flex-1 overflow-y-auto px-2" data-tour="sidebar-bots">
-        <div className="flex flex-col gap-0.5">
+      <div className="flex-1 overflow-y-auto px-2">
+        <div className="flex flex-col gap-0.5" data-tour="sidebar-bots">
           {visibleBots.length === 0 ? (
             <div className="px-3 py-8 text-center text-[13px] text-ink-secondary">
               {query.trim() ? "No chats match" : "No chats yet"}

@@ -5,6 +5,31 @@ import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    target: "es2022",
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return;
+          if (id.includes("react-dom") || id.includes("/react/")) return "react";
+          if (id.includes("posthog")) return "posthog";
+          if (id.includes("shiki") || id.includes("@shikijs")) return "shiki";
+          if (id.includes("lucide-react")) return "icons";
+          if (
+            id.includes("react-markdown") ||
+            id.includes("remark") ||
+            id.includes("micromark") ||
+            id.includes("/mdast") ||
+            id.includes("/hast") ||
+            id.includes("unified") ||
+            id.includes("/unist")
+          ) {
+            return "markdown";
+          }
+        },
+      },
+    },
+  },
   test: {
     environment: "node",
     include: ["server/**/*.test.ts"],

@@ -50,7 +50,8 @@ export class TenantStores {
     const root = userId === "__desktop__" ? DATA_DIR : join(DATA_DIR, "tenants", userId);
     mkdirSync(root, { recursive: true });
     store = new Store(this.defaultSelection, root);
-    store.seedIfEmpty();
+    // Desktop always has a starter bot; SaaS tenants create their first one in onboarding.
+    if (userId === "__desktop__") store.seedIfEmpty();
     this.stores.set(userId, store);
     this.touchAccess(userId);
     this.prune();
@@ -79,7 +80,6 @@ export class TenantStores {
         const { bots, messages } = await cx.hydrateFromConvex(userId);
         store.replaceState(bots, messages);
         store.setMirror(cx.createConvexMirror(userId));
-        if (!store.bots.length) store.seedIfEmpty();
         await store.flush();
         this.stores.set(userId, store);
         this.touchAccess(userId);

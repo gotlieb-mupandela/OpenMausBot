@@ -114,6 +114,7 @@ interface AppState {
 
 type Action =
   | { type: "hydrate"; bots: Bot[]; preferredId?: string | null }
+  | { type: "hydrateMessages"; botId: string; messages: Message[] }
   | { type: "instances"; instances: InstanceInfo[] }
   | { type: "configStatus"; config: ConfigStatus }
   | { type: "select"; id: string }
@@ -180,6 +181,17 @@ function patchCard(state: AppState, botId: string, messageId: string, patch: Par
   }));
 }
 
+function mergeMessages(server: Message[], prev: Message[] | undefined): Message[] {
+  if (!prev?.length) return server;
+  const byId = new Map(server.map((m) => [m.id, m]));
+  for (const m of prev) {
+    const existing = byId.get(m.id);
+    if (!existing) byId.set(m.id, m);
+    else if (m.png && !existing.png) byId.set(m.id, { ...existing, png: m.png, mime: m.mime ?? existing.mime });
+  }
+  return [...byId.values()].sort((a, b) => a.at - b.at);
+}
+
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "hydrate": {
@@ -187,14 +199,9 @@ function reducer(state: AppState, action: Action): AppState {
       const bots = action.bots.map((serverBot) => {
         const prev = prevById.get(serverBot.id);
         if (!prev?.messages?.length) return serverBot;
-        const byId = new Map(serverBot.messages.map((m) => [m.id, m]));
-        for (const m of prev.messages) {
-          if (!byId.has(m.id)) byId.set(m.id, m);
-        }
-        const messages = [...byId.values()].sort((a, b) => a.at - b.at);
         return {
           ...serverBot,
-          messages,
+          messages: mergeMessages(serverBot.messages, prev.messages),
           // keep local busy if a turn just started and the snapshot lagged
           busy: Boolean(serverBot.busy || prev.busy),
         };
@@ -212,6 +219,11 @@ function reducer(state: AppState, action: Action): AppState {
         selectedId,
       };
     }
+    case "hydrateMessages":
+      return updateBot(state, action.botId, (b) => ({
+        ...b,
+        messages: mergeMessages(action.messages, b.messages),
+      }));
     case "instances":
       return { ...state, instances: action.instances };
     case "configStatus":
@@ -468,6 +480,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   // debounced PATCH per bot for text-field edits (name/title/description)
   const patchTimers = useRef(new Map<string, { timer: ReturnType<typeof setTimeout>; patch: Record<string, unknown> }>());
+  const loadThreadRef = useRef<(botId: string, force?: boolean) => void>(() => {});
 
   const dispatch = useMemo(() => {
     const showError = (e: unknown) => {
@@ -606,6 +619,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (bot?.unread) {
             api(`/api/bots/${action.id}`, { method: "PATCH", body: JSON.stringify({ unread: false }) }).catch(() => {});
           }
+          loadThreadRef.current(action.id);
           break;
         }
         case "setModel":
@@ -645,7 +659,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let backoffMs = 800;
 
-    const loadAll = () => {
+    let seenOpen = false;
+    const loadedThreads = new Set<string>();
+    const loadThread = (botId: string, force = false) => {
+      if (!botId || (!force && loadedThreads.has(botId))) return;
+      loadedThreads.add(botId);
+      api(`/api/bots/${botId}/messages`)
+        .then(({ messages }) => alive && rawDispatch({ type: "hydrateMessages", botId, messages: messages ?? [] }))
+        .catch(() => {
+          loadedThreads.delete(botId);
+        });
+    };
+    loadThreadRef.current = loadThread;
+
+    const loadAll = (resync = false) => {
       let preferredId: string | null = null;
       try {
         preferredId = localStorage.getItem("aishe.selectedBot");
@@ -653,7 +680,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         preferredId = null;
       }
       api("/api/bots")
-        .then(({ bots }) => alive && rawDispatch({ type: "hydrate", bots, preferredId }))
+        .then(({ bots }) => {
+          if (!alive) return;
+          rawDispatch({ type: "hydrate", bots, preferredId });
+          const selected =
+            stateRef.current.selectedId ||
+            (preferredId && (bots as Bot[]).some((b) => b.id === preferredId) ? preferredId : "") ||
+            (bots as Bot[])[0]?.id;
+          if (selected) loadThread(selected, resync);
+        })
         .catch(() => {});
       api("/api/instances")
         .then(({ instances }) => alive && rawDispatch({ type: "instances", instances }))
@@ -677,7 +712,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       es.onopen = () => {
         backoffMs = 800;
         rawDispatch({ type: "connected", value: true });
-        loadAll(); // resync anything missed while disconnected
+        if (seenOpen) loadAll(true);
+        seenOpen = true;
         pokeRoutines();
         if (!tickTimer) tickTimer = setInterval(pokeRoutines, 45_000);
       };

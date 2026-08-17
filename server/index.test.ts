@@ -87,6 +87,10 @@ describe("harness HTTP API", () => {
     expect(status).toBe(200);
     expect(body.bots.length).toBeGreaterThanOrEqual(1);
     expect(body.bots[0].messages.length).toBeGreaterThanOrEqual(2);
+
+    const thread = await api("GET", `/api/bots/${body.bots[0].id}/messages`);
+    expect(thread.status).toBe(200);
+    expect(thread.body.messages.length).toBeGreaterThanOrEqual(2);
   });
 
   it("describes the configured fleet, shadows included", async () => {

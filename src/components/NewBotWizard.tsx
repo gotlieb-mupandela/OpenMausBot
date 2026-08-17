@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { useStore } from "@/state/store";
 import { MausAvatar } from "./Avatar";
@@ -64,7 +64,9 @@ const PRESETS: Array<{
 export function NewBotWizard({ onClose }: { onClose: () => void }) {
   const { state, dispatch } = useStore();
   const { plus } = useAccess();
-  const atFreeLimit = !plus && state.bots.filter((b) => !b.hidden).length >= 1;
+  const visibleBots = state.bots.filter((b) => !b.hidden);
+  const atFreeLimit = !plus && visibleBots.length >= 1;
+  const isFirst = visibleBots.length === 0;
   const { closeList } = useMobileNav();
   const [name, setName] = useState("New Bot");
   const [color, setColor] = useState<MausColor>("blue");
@@ -72,6 +74,7 @@ export function NewBotWizard({ onClose }: { onClose: () => void }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [busy, setBusy] = useState(false);
+  const pendingCount = useRef(visibleBots.length);
 
   const applyPreset = (preset: (typeof PRESETS)[number]) => {
     setName(preset.name);
@@ -81,8 +84,21 @@ export function NewBotWizard({ onClose }: { onClose: () => void }) {
     setDescription(preset.description);
   };
 
+  useEffect(() => {
+    if (busy && state.error) setBusy(false);
+  }, [busy, state.error]);
+
+  useEffect(() => {
+    if (!busy) return;
+    if (state.bots.filter((b) => !b.hidden).length > pendingCount.current) {
+      closeList();
+      onClose();
+    }
+  }, [busy, state.bots, closeList, onClose]);
+
   const start = () => {
     if (busy || atFreeLimit) return;
+    pendingCount.current = state.bots.filter((b) => !b.hidden).length;
     setBusy(true);
     dispatch({
       type: "newBot",
@@ -94,13 +110,11 @@ export function NewBotWizard({ onClose }: { onClose: () => void }) {
         mascotExpression: expression,
       },
     });
-    closeList();
-    onClose();
   };
 
   return (
     <div
-      className="absolute inset-0 z-50 flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4"
+      className="fixed inset-0 z-[110] flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4"
       onClick={onClose}
     >
       <div
@@ -110,7 +124,7 @@ export function NewBotWizard({ onClose }: { onClose: () => void }) {
         <div className="flex items-center justify-between border-b border-hairline/30 px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-5">
           <div className="flex items-center gap-2.5">
             <MausAvatar color={color} state={expression} size={28} animated={false} />
-            <span className="text-[15px] font-semibold text-ink">New Bot</span>
+            <span className="text-[15px] font-semibold text-ink">{isFirst ? "Your first bot" : "New Bot"}</span>
           </div>
           <button
             onClick={onClose}
@@ -179,7 +193,7 @@ export function NewBotWizard({ onClose }: { onClose: () => void }) {
               disabled={busy}
               className="mt-4 w-full rounded-xl bg-accent py-3 text-[15px] font-medium text-white hover:brightness-110 disabled:opacity-50"
             >
-              Get started
+              {busy ? "Creating…" : isFirst ? "Create bot" : "Get started"}
             </button>
           </div>
 

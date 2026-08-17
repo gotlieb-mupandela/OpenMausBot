@@ -30,6 +30,17 @@ export function trimThreadMessages<T extends MessageLike>(messages: T[], max = M
   });
 }
 
+/** Drop every screenshot payload — used for the bot list so first paint stays small. */
+export function stripScreenPayloads<T extends MessageLike>(messages: T[]): T[] {
+  return messages.map((m) => {
+    if (m.kind === "screen" && m.png) {
+      const { png: _png, ...rest } = m;
+      return rest as T;
+    }
+    return m;
+  });
+}
+
 export class TurnGate {
   private held = new Set<string>();
   private perUser = new Map<string, number>();

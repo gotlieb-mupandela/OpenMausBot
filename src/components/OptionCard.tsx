@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import { Check, X } from "lucide-react";
 import { useStore, type Message } from "@/state/store";
 import { cn } from "@/lib/cn";
 
 const LETTERS = ["A", "B", "C", "D", "E", "F"];
 
-export function OptionCard({
+export const OptionCard = memo(function OptionCard({
   botId,
   message,
 }: {
@@ -38,7 +38,7 @@ export function OptionCard({
   }
 
   return (
-    <div className="w-full max-w-[840px] rounded-2xl border border-hairline/50 bg-card p-3.5 sm:p-4">
+    <div className="w-full max-w-[840px] shrink-0 rounded-2xl border border-hairline/50 bg-card p-3.5 sm:p-4">
       <div className="flex items-start justify-between gap-3 sm:gap-4">
         <div>
           <div className="text-[16px] font-semibold text-ink">{card.title}</div>
@@ -79,4 +79,4 @@ export function OptionCard({
       />
     </div>
   );
-}
+});

@@ -14,10 +14,14 @@ function secret(): string {
   return s;
 }
 
+let cachedClient: ConvexHttpClient | null = null;
+
 export function convexClient(): ConvexHttpClient {
+  if (cachedClient) return cachedClient;
   const url = process.env.CONVEX_URL;
   if (!url) throw new Error("CONVEX_URL unset");
-  return new ConvexHttpClient(url);
+  cachedClient = new ConvexHttpClient(url);
+  return cachedClient;
 }
 
 function asUserId(id: string): Id<"users"> {
@@ -193,15 +197,18 @@ export async function hydrateFromConvex(
   const rows = await client.query(api.bots.listForUser, { secret: s, userId: uid });
   const bots = rows.map(toBotRecord);
   const messages = new Map<string, Message[]>();
-  for (const bot of bots) {
-    const msgs = await client.query(api.messages.listForThread, {
-      secret: s,
-      userId: uid,
-      threadId: bot.threadId,
-      limit: MAX_MESSAGES_PER_THREAD,
-    });
-    messages.set(bot.threadId, trimThreadMessages(msgs.map(toMessage)));
-  }
+  const threads = await Promise.all(
+    bots.map(async (bot) => {
+      const msgs = await client.query(api.messages.listForThread, {
+        secret: s,
+        userId: uid,
+        threadId: bot.threadId,
+        limit: MAX_MESSAGES_PER_THREAD,
+      });
+      return [bot.threadId, trimThreadMessages(msgs.map(toMessage))] as const;
+    }),
+  );
+  for (const [threadId, msgs] of threads) messages.set(threadId, msgs);
   return { bots, messages };
 }
 
