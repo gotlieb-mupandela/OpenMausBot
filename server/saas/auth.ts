@@ -131,11 +131,11 @@ function fromConvexRow(row: cx.ConvexUserRow): SaasUser {
   };
 }
 
+/** Every signed-in SaaS user gets Plus features (complimentary). Polar still records paid subs. */
 export function isPlus(
   user: { polarSubscriptionId?: string; subscriptionStatus: SubscriptionStatus } | null | undefined,
 ): boolean {
-  if (!user?.polarSubscriptionId) return false;
-  return user.subscriptionStatus === "active" || user.subscriptionStatus === "trialing";
+  return Boolean(user);
 }
 
 export function toPublic(user: SaasUser): PublicUser {

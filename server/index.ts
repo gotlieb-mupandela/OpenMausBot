@@ -325,8 +325,13 @@ function readCuaConnection(): { command: string; args: string[]; env: Record<str
 }
 
 // ── turn dispatch (upstream ProviderCommandReactor, miniature) ──────────
-async function startTurn(botId: string, text: string, opts?: { commsDepth?: number }) {
-  const owned = SAAS_MODE ? tenants.findByBotId(botId) : { userId: "__desktop__", store: desktopStore };
+async function startTurn(botId: string, text: string, opts?: { commsDepth?: number; userId?: string }) {
+  const owned =
+    opts?.userId && opts.userId !== "__desktop__"
+      ? { userId: opts.userId, store: await tenants.touch(opts.userId) }
+      : opts?.userId === "__desktop__" || !SAAS_MODE
+        ? { userId: "__desktop__", store: desktopStore }
+        : tenants.findByBotId(botId);
   const store = owned?.store;
   if (!store) throw Object.assign(new Error("no such bot"), { status: 404 });
   const userId = owned!.userId;
@@ -759,6 +764,14 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { mode: "saas", googleAuth: google.googleConfigured() });
     }
 
+    if (SAAS_MODE && method === "POST" && path === "/api/cron/routines") {
+      const expected = process.env.OMB_HARNESS_SECRET?.trim();
+      const got = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "").trim();
+      if (!expected || got !== expected) return json(res, 401, { error: "unauthorized" });
+      const ran = await tickRoutines();
+      return json(res, 200, ran);
+    }
+
     if (SAAS_MODE && method === "POST" && path === "/api/billing/polar/webhook") {
       try {
         await polar.handleWebhook(req.headers, await readRawBody(req));
@@ -785,6 +798,12 @@ const server = createServer(async (req, res) => {
       sseUserId = saasUser.id;
     }
     const broadcastUser = (payload: unknown) => broadcastTo(sseUserId, payload);
+
+    if (method === "POST" && path === "/api/routines/tick") {
+      if (SAAS_MODE && saasUser && !plusUnlocked(saasUser)) return json(res, 402, plusRequiredPayload("Routines"));
+      const ran = await tickRoutines();
+      return json(res, 200, ran);
+    }
 
     if (SAAS_MODE && saasUser && method === "GET" && path === "/api/billing/checkout") {
       res.writeHead(302, {
@@ -852,6 +871,7 @@ const server = createServer(async (req, res) => {
 
     // ── events stream ──
     if (method === "GET" && path === "/api/events") {
+      void tickRoutines();
       // X-Accel-Buffering + flushHeaders: Vite/nginx must not hold SSE frames.
       res.writeHead(200, {
         "content-type": "text/event-stream; charset=utf-8",
@@ -980,7 +1000,7 @@ const server = createServer(async (req, res) => {
       const uid = saasUser?.id ?? "__desktop__";
       const row = await routines.getRoutine(uid, m[2]);
       if (!row || row.botId !== bot.id) return json(res, 404, { error: "no such routine" });
-      const started = await startTurn(bot.id, routines.routinePrompt(row));
+      const started = await startTurn(bot.id, routines.routinePrompt(row), { userId: uid });
       const updated = await routines.markRun(uid, row);
       return json(res, 202, { ok: true, routine: updated, threadId: started.threadId, message: started.message });
     }
@@ -1246,33 +1266,50 @@ server.listen(PORT, SAAS_HOST, () => {
 });
 
 let routineTickBusy = false;
-async function tickRoutines() {
-  if (routineTickBusy) return;
+async function tickRoutines(): Promise<{ due: number; ran: number; skipped: number }> {
+  if (routineTickBusy) return { due: 0, ran: 0, skipped: 0 };
   routineTickBusy = true;
+  let ran = 0;
+  let skipped = 0;
   try {
     const due = await routines.listDue();
     for (const row of due) {
       try {
         if (SAAS_MODE && row.userId !== "__desktop__") {
           const ownerUser = await auth.findUserById(row.userId);
-          if (!plusUnlocked(ownerUser)) continue;
-          await tenants.touch(row.userId);
+          if (!plusUnlocked(ownerUser)) {
+            skipped++;
+            console.warn(`[routines] skip ${row.id}: Plus required`);
+            continue;
+          }
         }
-        const owned = SAAS_MODE
-          ? tenants.findByBotId(row.botId)
-          : { userId: "__desktop__", store: desktopStore };
-        const bot = owned?.store.bot(row.botId);
-        if (!bot) continue;
-        if (owned!.userId !== row.userId && SAAS_MODE) continue;
-        if (bot.busy) continue;
-        await startTurn(bot.id, routines.routinePrompt(row));
+        const store =
+          SAAS_MODE && row.userId !== "__desktop__"
+            ? await tenants.touch(row.userId)
+            : desktopStore;
+        const bot = store.bot(row.botId);
+        if (!bot) {
+          skipped++;
+          console.warn(`[routines] skip ${row.id}: no bot ${row.botId}`);
+          continue;
+        }
+        if (bot.busy) {
+          skipped++;
+          continue;
+        }
+        await startTurn(bot.id, routines.routinePrompt(row), { userId: row.userId });
         await routines.markRun(row.userId, row);
+        ran++;
       } catch (e) {
+        skipped++;
         console.warn("[routines] tick:", e instanceof Error ? e.message : e);
       }
     }
+    if (due.length) console.log(`[routines] due=${due.length} ran=${ran} skipped=${skipped}`);
+    return { due: due.length, ran, skipped };
   } catch (e) {
     console.warn("[routines] listDue:", e instanceof Error ? e.message : e);
+    return { due: 0, ran, skipped };
   } finally {
     routineTickBusy = false;
   }

@@ -3,11 +3,12 @@ import { isPlus } from "./auth.ts";
 import { FREE_BOT_LIMIT, plusRequiredPayload } from "./plan.ts";
 
 describe("isPlus", () => {
-  it("requires an active Polar subscription id", () => {
-    expect(isPlus({ subscriptionStatus: "active" })).toBe(false);
+  it("is complimentary for every signed-in user", () => {
+    expect(isPlus(null)).toBe(false);
+    expect(isPlus(undefined)).toBe(false);
+    expect(isPlus({ subscriptionStatus: "none" })).toBe(true);
+    expect(isPlus({ subscriptionStatus: "canceled" })).toBe(true);
     expect(isPlus({ subscriptionStatus: "active", polarSubscriptionId: "sub_1" })).toBe(true);
-    expect(isPlus({ subscriptionStatus: "trialing", polarSubscriptionId: "sub_1" })).toBe(true);
-    expect(isPlus({ subscriptionStatus: "canceled", polarSubscriptionId: "sub_1" })).toBe(false);
   });
 });
 

@@ -646,6 +646,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
     loadAll();
 
+    let tickTimer: ReturnType<typeof setInterval> | null = null;
+    const pokeRoutines = () => {
+      void fetch("/api/routines/tick", { method: "POST", credentials: "include" }).catch(() => {});
+    };
+
     const connect = () => {
       if (!alive) return;
       es?.close();
@@ -655,6 +660,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         backoffMs = 800;
         rawDispatch({ type: "connected", value: true });
         loadAll(); // resync anything missed while disconnected
+        pokeRoutines();
+        if (!tickTimer) tickTimer = setInterval(pokeRoutines, 45_000);
       };
       es.onerror = () => {
         rawDispatch({ type: "connected", value: false });
@@ -737,6 +744,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => {
       alive = false;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (tickTimer) clearInterval(tickTimer);
       es?.close();
     };
   }, []);

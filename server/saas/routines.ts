@@ -38,7 +38,7 @@ export type RoutineInput = {
   enabled?: boolean;
 };
 
-const MIN_INTERVAL = 15;
+const MIN_INTERVAL = 1;
 
 function tenantRoot(userId: string): string {
   return userId === "__desktop__" ? DATA_DIR : join(DATA_DIR, "tenants", userId);

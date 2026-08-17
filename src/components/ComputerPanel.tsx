@@ -81,7 +81,8 @@ function RoutinesSection({ botId }: { botId: string }) {
   const [instruction, setInstruction] = useState("");
   const [kind, setKind] = useState<"daily" | "interval">("daily");
   const [time, setTime] = useState("09:00");
-  const [intervalHours, setIntervalHours] = useState("1");
+  const [intervalAmount, setIntervalAmount] = useState("1");
+  const [intervalUnit, setIntervalUnit] = useState<"minutes" | "hours">("hours");
 
   const load = () => {
     setLoading(true);
@@ -96,6 +97,14 @@ function RoutinesSection({ botId }: { botId: string }) {
 
   useEffect(() => {
     void load();
+    void fetch("/api/routines/tick", { method: "POST", credentials: "include" }).catch(() => {});
+    const id = window.setInterval(() => {
+      void fetch("/api/routines/tick", { method: "POST", credentials: "include" }).catch(() => {});
+      void api(`/api/bots/${botId}/routines`)
+        .then((d) => setRows(d.routines ?? []))
+        .catch(() => {});
+    }, 20_000);
+    return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [botId]);
 
@@ -103,7 +112,8 @@ function RoutinesSection({ botId }: { botId: string }) {
     setBusyId("create");
     try {
       const [h, mi] = time.split(":").map(Number);
-      const hours = Math.max(0.25, Number(intervalHours) || 1);
+      const amount = Math.max(1, Number(intervalAmount) || 1);
+      const intervalMinutes = intervalUnit === "hours" ? Math.round(amount * 60) : Math.round(amount);
       await api(`/api/bots/${botId}/routines`, {
         method: "POST",
         body: JSON.stringify({
@@ -113,7 +123,7 @@ function RoutinesSection({ botId }: { botId: string }) {
           hour: h,
           minute: mi,
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          intervalMinutes: Math.round(hours * 60),
+          intervalMinutes,
         }),
       });
       setName("");
@@ -194,7 +204,12 @@ function RoutinesSection({ botId }: { botId: string }) {
                   <div className="truncate text-[13px] font-medium text-ink">{r.name}</div>
                   <div className="mt-0.5 text-[12px] text-ink-secondary">{scheduleLabel(r)}</div>
                   <div className="mt-0.5 text-[11px] text-ink-secondary">
-                    Next {new Date(r.nextRunAt).toLocaleString()}
+                    {r.enabled && r.nextRunAt < Date.now() - 5_000 ? (
+                      <span className="text-warning">Overdue · </span>
+                    ) : (
+                      "Next "
+                    )}
+                    {new Date(r.nextRunAt).toLocaleString()}
                     {r.lastRunAt ? ` · last ${new Date(r.lastRunAt).toLocaleString()}` : ""}
                   </div>
                 </div>
@@ -266,15 +281,25 @@ function RoutinesSection({ botId }: { botId: string }) {
           {kind === "daily" ? (
             <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className={inputClass} />
           ) : (
-            <input
-              type="number"
-              min={0.25}
-              step={0.25}
-              value={intervalHours}
-              onChange={(e) => setIntervalHours(e.target.value)}
-              placeholder="Hours between runs"
-              className={inputClass}
-            />
+            <div className="flex gap-2">
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={intervalAmount}
+                onChange={(e) => setIntervalAmount(e.target.value)}
+                placeholder="Interval"
+                className={inputClass}
+              />
+              <select
+                value={intervalUnit}
+                onChange={(e) => setIntervalUnit(e.target.value as "minutes" | "hours")}
+                className={cn(inputClass, "w-[130px] shrink-0")}
+              >
+                <option value="minutes">minutes</option>
+                <option value="hours">hours</option>
+              </select>
+            </div>
           )}
           <div className="flex gap-2">
             <button

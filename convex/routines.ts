@@ -36,10 +36,13 @@ export const listDue = query({
   args: { secret: v.string(), now: v.number() },
   handler: async (ctx, args) => {
     assertHarness(args.secret);
-    return await ctx.db
-      .query("routines")
-      .withIndex("by_due", (q) => q.eq("enabled", true).lte("nextRunAt", args.now))
-      .take(40);
+    // Filter in-memory so overdue rows are never missed if the compound
+    // index range is empty/stale after a schema change.
+    const rows = await ctx.db.query("routines").collect();
+    return rows
+      .filter((r) => r.enabled && r.nextRunAt <= args.now)
+      .sort((a, b) => a.nextRunAt - b.nextRunAt)
+      .slice(0, 40);
   },
 });
 
