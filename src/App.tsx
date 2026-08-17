@@ -156,7 +156,7 @@ export default function App() {
   }
 
   if (saasMode && !saasUser) {
-    return <AuthScreen onAuthed={setSaasUser} googleAuth={googleAuth} />;
+    return <AuthScreen googleAuth={googleAuth} />;
   }
 
   return (

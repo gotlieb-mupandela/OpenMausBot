@@ -677,23 +677,8 @@ const server = createServer(async (req, res) => {
   try {
     // ── SaaS auth (public) ─────────────────────────────────────────────
     if (SAAS_MODE && path.startsWith("/api/auth/")) {
-      if (method === "POST" && path === "/api/auth/signup") {
-        const body = await readBody(req);
-        const user = await auth.createUser({
-          email: String(body.email ?? ""),
-          password: String(body.password ?? ""),
-          name: body.name ? String(body.name) : undefined,
-        });
-        await tenants.touch(user.id);
-        auth.issueSession(res, user.id);
-        return json(res, 201, { user: auth.toPublic(user), mode: "saas" });
-      }
-      if (method === "POST" && path === "/api/auth/login") {
-        const body = await readBody(req);
-        const user = await auth.authenticate(String(body.email ?? ""), String(body.password ?? ""));
-        await tenants.touch(user.id);
-        auth.issueSession(res, user.id);
-        return json(res, 200, { user: auth.toPublic(user), mode: "saas" });
+      if (method === "POST" && (path === "/api/auth/signup" || path === "/api/auth/login")) {
+        return json(res, 400, { error: "Sign in with Google" });
       }
       if (method === "GET" && path === "/api/auth/google") {
         try {
