@@ -127,15 +127,7 @@ export function PluginsPanel({ saasMode = false }: { saasMode?: boolean }) {
     setError(null);
     api(`/api/connectors/${slug}/authorize`, { method: "POST" })
       .then(({ url }) => {
-        window.open(url);
-        let tries = 0;
-        const timer = setInterval(() => {
-          tries += 1;
-          void refreshStatus([slug]).then(() => {
-            if (statusRef.current[slug]?.connected) clearInterval(timer);
-          });
-          if (tries >= 24) clearInterval(timer); // ~2 min
-        }, 5000);
+        window.location.assign(url);
       })
       .catch((e) => setError(e.message))
       .finally(() => setBusySlug(null));

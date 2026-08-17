@@ -30,6 +30,17 @@ function Shell({
   const { state, dispatch } = useStore();
   const { plus } = useAccess();
   const bot = state.bots.find((b) => b.id === state.selectedId) ?? state.bots[0];
+
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("plugins") !== "1" && q.get("status") !== "success") return;
+    dispatch({ type: "togglePlugins", open: true });
+    q.delete("plugins");
+    q.delete("status");
+    q.delete("connected_account_id");
+    const next = `${window.location.pathname}${q.toString() ? `?${q}` : ""}`;
+    window.history.replaceState({}, "", next);
+  }, [dispatch]);
   return (
     <div className="flex h-full flex-col">
       <UpdateBanner />

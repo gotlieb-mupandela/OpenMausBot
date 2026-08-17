@@ -708,9 +708,11 @@ export async function removeService(cfg: ComposioCfg, slug: string, userId?: str
 
 /** Mint a browser auth link for one service. Returns { url } or throws. */
 export async function authorizeService(cfg: ComposioCfg, slug: string, userId?: string) {
+  const callbackUrl = pluginCallbackUrl();
   if (resolveConnectKey(cfg)) {
     const out = await composioTool(cfg, "COMPOSIO_MANAGE_CONNECTIONS", {
       toolkits: [{ name: slug, action: "add" }],
+      ...(callbackUrl ? { callback_url: callbackUrl } : {}),
     }, userId);
     // be liberal: any https URL mentioning composio/auth wins, else the first
     const raw = JSON.stringify(out);
@@ -728,10 +730,17 @@ export async function authorizeService(cfg: ComposioCfg, slug: string, userId?: 
   const linked = await backendJson(apiKey, "POST", "/connected_accounts/link", {
     auth_config_id: authConfigId,
     user_id: entityUserId(userId),
+    ...(callbackUrl ? { callback_url: callbackUrl } : {}),
   });
   const url = linked?.redirect_url ?? linked?.redirectUrl ?? linked?.url;
   if (!url) throw new Error(`Composio returned no auth link for ${slug}`);
   return { url: String(url) };
+}
+
+function pluginCallbackUrl(): string | undefined {
+  const origin = process.env.OMB_PUBLIC_URL?.trim().replace(/\/$/, "");
+  if (!origin) return undefined;
+  return `${origin}/?plugins=1`;
 }
 
 // ── marketplace catalog ────────────────────────────────────────────────
