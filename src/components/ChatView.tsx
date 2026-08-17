@@ -147,17 +147,30 @@ export function ChatView({ bot }: { bot: Bot }) {
 
   const feed = useMemo(() => buildFeed(bot.messages, bot.busy ?? false), [bot.messages, bot.busy]);
 
-  // Scroll pinning: follow the bottom while the user hasn't scrolled away.
-  // Follow breaks ONLY on an upward user gesture (wheel/touch), never on
-  // scroll position checks — streamed content growth flickers "at bottom"
-  // false for a frame, and breaking there kills follow permanently
-  // (upstream-verified failure). Scrolling back to the end re-arms it.
+  // Follow the live end until the user scrolls away. Programmatic stick-to-bottom
+  // must not count as a user scroll (that used to re-arm follow and yank the view).
   const [follow, setFollow] = useState(true);
+  const followRef = useRef(true);
+  followRef.current = follow;
+  const sticking = useRef(false);
   const touchY = useRef(0);
+
+  const atEnd = (el: HTMLDivElement, pad = 80) =>
+    el.scrollHeight - el.scrollTop - el.clientHeight < pad;
+
+  const stickToBottom = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    sticking.current = true;
+    el.scrollTop = el.scrollHeight;
+    requestAnimationFrame(() => {
+      sticking.current = false;
+    });
+  };
 
   useEffect(() => setFollow(true), [bot.id]);
   useEffect(() => {
-    if (follow) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    if (follow) stickToBottom();
   }, [bot.id, feed.length, streaming, bot.busy, liveScreen?.png, follow]);
 
   // Viewing this chat clears the unread badge (including after a turn finishes).
@@ -166,13 +179,9 @@ export function ChatView({ bot }: { bot: Bot }) {
     dispatch({ type: "updateBot", botId: bot.id, patch: { unread: false } });
   }, [bot.id, bot.unread, dispatch]);
 
-  const atEnd = () => {
-    const el = scrollRef.current;
-    return !el || el.scrollHeight - el.scrollTop - el.clientHeight < 48;
-  };
   const jumpToLatest = () => {
     setFollow(true);
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    stickToBottom();
   };
 
   const first = bot.messages[0];
@@ -246,19 +255,24 @@ export function ChatView({ bot }: { bot: Bot }) {
       {/* Messages */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto px-3 [overflow-anchor:none] sm:px-5"
+        className={cn(
+          "flex-1 overflow-y-auto px-3 sm:px-5",
+          follow ? "[overflow-anchor:none]" : "[overflow-anchor:auto]",
+        )}
         onWheel={(e) => {
           if (e.deltaY < 0) setFollow(false);
-          else if (atEnd()) setFollow(true);
         }}
         onTouchStart={(e) => (touchY.current = e.touches[0]?.clientY ?? 0)}
         onTouchMove={(e) => {
           const y = e.touches[0]?.clientY ?? 0;
-          if (y > touchY.current + 4) setFollow(false);
-          else if (atEnd()) setFollow(true);
+          if (y > touchY.current + 8) setFollow(false);
         }}
         onScroll={() => {
-          if (!follow && atEnd()) setFollow(true);
+          if (sticking.current) return;
+          const el = scrollRef.current;
+          if (!el) return;
+          const pinned = atEnd(el);
+          if (pinned !== followRef.current) setFollow(pinned);
         }}
       >
         <div className="mx-auto flex max-w-[900px] flex-col gap-3 pb-4">
