@@ -26,7 +26,7 @@ export function AuthScreen({ googleAuth = false }: { onAuthed?: (user: SaasUser)
       <div className="my-auto flex w-full max-w-[420px] flex-col rounded-t-2xl border border-hairline/40 bg-panel p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:rounded-2xl sm:p-8">
         <div className="flex flex-col items-center">
           <MausAvatar color="blue" state="happy" size={64} />
-          <h1 className="mt-4 text-[22px] font-semibold text-ink">OpenMausBot</h1>
+          <h1 className="mt-4 text-[22px] font-semibold text-ink">Aishe</h1>
           <p className="mt-1.5 text-center text-[14px] text-ink-secondary">
             Your AI bot team in the cloud — sign in with Google to continue.
           </p>

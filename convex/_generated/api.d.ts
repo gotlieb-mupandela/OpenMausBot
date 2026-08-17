@@ -10,6 +10,7 @@
 
 import type * as bots from "../bots.js";
 import type * as messages from "../messages.js";
+import type * as routines from "../routines.js";
 import type * as users from "../users.js";
 
 import type {
@@ -21,6 +22,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   bots: typeof bots;
   messages: typeof messages;
+  routines: typeof routines;
   users: typeof users;
 }>;
 

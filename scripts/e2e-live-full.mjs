@@ -103,7 +103,7 @@ try {
   await shot(page, "02-after-auth");
 
   const hasComposer = (await page.getByPlaceholder(/Message /).count()) > 0;
-  const authVisible = (await page.getByText("OpenMausBot").count()) > 0 && !hasComposer;
+  const authVisible = (await page.getByText("Aishe").count()) > 0 && !hasComposer;
   if (!hasComposer) {
     mark("login_session", false, authVisible ? "still on auth screen" : "no composer after login");
   } else {

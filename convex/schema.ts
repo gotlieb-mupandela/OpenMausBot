@@ -24,7 +24,7 @@ const optionCard = v.object({
 });
 
 /**
- * SaaS cloud data for OpenMausBot.
+ * SaaS cloud data for Aishe.
  * Desktop mode keeps local JSON; the Node harness owns providers + SSE.
  */
 export default defineSchema({
@@ -95,4 +95,22 @@ export default defineSchema({
     .index("by_thread", ["threadId"])
     .index("by_user_thread", ["userId", "threadId"])
     .index("by_messageId", ["messageId"]),
+
+  routines: defineTable({
+    userId: v.id("users"),
+    botId: v.string(),
+    name: v.string(),
+    instruction: v.string(),
+    kind: v.union(v.literal("daily"), v.literal("interval")),
+    hour: v.optional(v.number()),
+    minute: v.optional(v.number()),
+    timezone: v.optional(v.string()),
+    intervalMinutes: v.optional(v.number()),
+    enabled: v.boolean(),
+    nextRunAt: v.number(),
+    lastRunAt: v.union(v.number(), v.null()),
+    createdAt: v.number(),
+  })
+    .index("by_user_bot", ["userId", "botId"])
+    .index("by_due", ["enabled", "nextRunAt"]),
 });

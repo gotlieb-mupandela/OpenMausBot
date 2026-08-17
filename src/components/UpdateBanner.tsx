@@ -45,7 +45,7 @@ export function UpdateBanner() {
       <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-secondary">
         {s.status === "available" && (
           <>
-            <span className="font-medium text-ink">OpenMausBot {s.version}</span> is available.
+            <span className="font-medium text-ink">Aishe {s.version}</span> is available.
           </>
         )}
         {s.status === "downloading" && (
@@ -55,7 +55,7 @@ export function UpdateBanner() {
         )}
         {s.status === "downloaded" && (
           <>
-            <span className="font-medium text-ink">OpenMausBot {s.version}</span> is ready — restart
+            <span className="font-medium text-ink">Aishe {s.version}</span> is ready — restart
             to apply.
           </>
         )}

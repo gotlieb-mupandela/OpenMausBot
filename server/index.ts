@@ -1,4 +1,4 @@
-// OpenMausBot server — the harness host. Clients hold no transports
+// Aishe server — the harness host. Clients hold no transports
 // (upstream rule): the React app dispatches typed commands over HTTP and
 // folds one SSE event stream; every provider process runs here.
 import { randomBytes } from "node:crypto";
@@ -21,6 +21,7 @@ import { SAAS_MODE, SAAS_HOST } from "./saas/mode.ts";
 import * as auth from "./saas/auth.ts";
 import * as google from "./saas/google.ts";
 import { TenantStores } from "./saas/tenants.ts";
+import * as routines from "./saas/routines.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -304,11 +305,11 @@ function stopScreenPoller(botId: string): Frame | null {
 }
 
 // Local computer-use contract written by Electron main on startup
-// (~/Library/Application Support/OpenMausBot/cua-connection.json). Read
+// (~/Library/Application Support/Aishe/cua-connection.json). Read
 // fresh each turn — Electron may restart or permissions may change.
 function readCuaConnection(): { command: string; args: string[]; env: Record<string, string> } | null {
   // new name first; pre-rename desktop builds used the old directory
-  for (const dir of ["OpenMausBot", "openmausbot", "OpenGrokBot", "opengrokbot"]) {
+  for (const dir of ["Aishe", "aishe", "OpenMausBot", "openmausbot", "OpenGrokBot", "opengrokbot"]) {
     try {
       const p = join(homedir(), "Library", "Application Support", dir, "cua-connection.json");
       const conn = JSON.parse(readFileSync(p, "utf8"));
@@ -353,7 +354,7 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
     .map((m) => ({ role: m.role === "user" ? ("user" as const) : ("assistant" as const), text: m.text! }));
 
   const persona = [
-    `You are ${bot.name}, a personal bot in OpenMausBot.`,
+    `You are ${bot.name}, a personal bot in Aishe.`,
     bot.title && `Role: ${bot.title}.`,
     bot.description && `About: ${bot.description}`,
   ]
@@ -783,7 +784,7 @@ const server = createServer(async (req, res) => {
           });
           broadcastTo(owned.userId, { kind: "message", threadId: from.threadId, message: note });
         }
-        const prefixed = `[Message from @${fromName}, another bot in this OpenMausBot workspace. Reply to them.]\n\n${message}`;
+        const prefixed = `[Message from @${fromName}, another bot in this Aishe workspace. Reply to them.]\n\n${message}`;
         const reply = await askBotAndWait(toBotId, prefixed, depth);
         return json(res, 200, { botName: target.name, text: reply });
       }
@@ -880,6 +881,70 @@ const server = createServer(async (req, res) => {
       broadcastUser({ kind: "message.patch", threadId: bot.threadId, message: patched });
       return json(res, 200, { message: patched });
     }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/routines$/);
+    if (m && method === "GET") {
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const uid = saasUser?.id ?? "__desktop__";
+      return json(res, 200, { routines: await routines.listForBot(uid, bot.id) });
+    }
+    if (m && method === "POST") {
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const uid = saasUser?.id ?? "__desktop__";
+      const body = await readBody(req);
+      const created = await routines.createRoutine(uid, bot.id, {
+        name: String(body.name ?? ""),
+        instruction: String(body.instruction ?? ""),
+        kind: body.kind === "interval" ? "interval" : "daily",
+        hour: body.hour != null ? Number(body.hour) : undefined,
+        minute: body.minute != null ? Number(body.minute) : undefined,
+        timezone: body.timezone != null ? String(body.timezone) : undefined,
+        intervalMinutes: body.intervalMinutes != null ? Number(body.intervalMinutes) : undefined,
+        enabled: body.enabled !== false,
+      });
+      return json(res, 201, { routine: created });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/routines\/([\w-]+)\/run$/);
+    if (m && method === "POST") {
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const uid = saasUser?.id ?? "__desktop__";
+      const row = await routines.getRoutine(uid, m[2]);
+      if (!row || row.botId !== bot.id) return json(res, 404, { error: "no such routine" });
+      const started = await startTurn(bot.id, routines.routinePrompt(row));
+      const updated = await routines.markRun(uid, row);
+      return json(res, 202, { ok: true, routine: updated, threadId: started.threadId, message: started.message });
+    }
+    m = path.match(/^\/api\/bots\/([\w-]+)\/routines\/([\w-]+)$/);
+    if (m && method === "PATCH") {
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const uid = saasUser?.id ?? "__desktop__";
+      const body = await readBody(req);
+      const updated = await routines.patchRoutine(uid, m[2], {
+        name: body.name != null ? String(body.name) : undefined,
+        instruction: body.instruction != null ? String(body.instruction) : undefined,
+        kind: body.kind === "daily" || body.kind === "interval" ? body.kind : undefined,
+        hour: body.hour != null ? Number(body.hour) : undefined,
+        minute: body.minute != null ? Number(body.minute) : undefined,
+        timezone: body.timezone != null ? String(body.timezone) : undefined,
+        intervalMinutes: body.intervalMinutes != null ? Number(body.intervalMinutes) : undefined,
+        enabled: body.enabled != null ? Boolean(body.enabled) : undefined,
+      });
+      if (!updated || updated.botId !== bot.id) return json(res, 404, { error: "no such routine" });
+      return json(res, 200, { routine: updated });
+    }
+    if (m && method === "DELETE") {
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const uid = saasUser?.id ?? "__desktop__";
+      const row = await routines.getRoutine(uid, m[2]);
+      if (!row || row.botId !== bot.id) return json(res, 404, { error: "no such routine" });
+      await routines.removeRoutine(uid, m[2]);
+      return json(res, 200, { ok: true });
+    }
+
     m = path.match(/^\/api\/bots\/([\w-]+)\/messages$/);
     if (m && method === "POST") {
       const body = await readBody(req);
@@ -919,7 +984,7 @@ const server = createServer(async (req, res) => {
     // child proves it is OURS by echoing its pid (a stray dev server has
     // the same API shape but a different pid)
     if (method === "GET" && path === "/api/health") {
-      return json(res, 200, { app: "openmausbot", pid: process.pid, static: Boolean(STATIC_DIR) });
+      return json(res, 200, { app: "aishe", pid: process.pid, static: Boolean(STATIC_DIR) });
     }
 
     // ── provider instances (model picker) ──
@@ -1105,8 +1170,41 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, SAAS_HOST, () => {
-  console.log(`openmausbot server on http://${SAAS_HOST === "0.0.0.0" ? "127.0.0.1" : SAAS_HOST}:${PORT}${SAAS_MODE ? " (saas)" : ""}`);
+  console.log(`aishe server on http://${SAAS_HOST === "0.0.0.0" ? "127.0.0.1" : SAAS_HOST}:${PORT}${SAAS_MODE ? " (saas)" : ""}`);
 });
+
+let routineTickBusy = false;
+async function tickRoutines() {
+  if (routineTickBusy) return;
+  routineTickBusy = true;
+  try {
+    const due = await routines.listDue();
+    for (const row of due) {
+      try {
+        if (SAAS_MODE && row.userId !== "__desktop__") {
+          await tenants.touch(row.userId);
+        }
+        const owned = SAAS_MODE
+          ? tenants.findByBotId(row.botId)
+          : { userId: "__desktop__", store: desktopStore };
+        const bot = owned?.store.bot(row.botId);
+        if (!bot) continue;
+        if (owned!.userId !== row.userId && SAAS_MODE) continue;
+        if (bot.busy) continue;
+        await startTurn(bot.id, routines.routinePrompt(row));
+        await routines.markRun(row.userId, row);
+      } catch (e) {
+        console.warn("[routines] tick:", e instanceof Error ? e.message : e);
+      }
+    }
+  } catch (e) {
+    console.warn("[routines] listDue:", e instanceof Error ? e.message : e);
+  } finally {
+    routineTickBusy = false;
+  }
+}
+setInterval(() => void tickRoutines(), 30_000);
+setTimeout(() => void tickRoutines(), 8_000);
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {

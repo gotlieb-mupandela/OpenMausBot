@@ -18,7 +18,7 @@ await client.mutation(api.users.resetOnboarding, {
   userId: uid,
 });
 
-const secret = process.env.OMB_SESSION_SECRET || "openmausbot-local-dev-secret-change-me";
+const secret = process.env.OMB_SESSION_SECRET || "aishe-local-dev-secret-change-me";
 const payload = { uid, exp: Date.now() + 86400000 };
 const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
 const sig = createHmac("sha256", secret).update(body).digest("base64url");

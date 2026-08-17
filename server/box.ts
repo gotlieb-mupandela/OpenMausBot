@@ -129,7 +129,7 @@ export async function provisionBox(cfg: AppConfig, owner: BoxOwner, displayName:
     throw new Error(
       process.env.OMB_SAAS === "1" || process.env.OMB_SAAS === "true"
         ? "cloud computer not configured — set BOX_TOKEN on the server"
-        : 'box provider not enabled — add {"box":{"token":"…"}} to ~/.openmausbot/config.json',
+        : 'box provider not enabled — add {"box":{"token":"…"}} to ~/.aishe/config.json',
     );
   }
   const vmName = await boxNameFor(owner);
@@ -198,7 +198,7 @@ export async function provisionBox(cfg: AppConfig, owner: BoxOwner, displayName:
     "command -v xdotool >/dev/null || sudo apt-get install -y -qq xdotool scrot imagemagick >/dev/null 2>&1 || true",
     `[ -f /opt/ogb/cua-ready ] || [ -f /tmp/ogb-cua-installing ] || { touch /tmp/ogb-cua-installing; nohup bash -c '${cuaInstall.replace(/'/g, "'\\''")}; rm -f /tmp/ogb-cua-installing' > /tmp/ogb-cua-install.log 2>&1 & }`,
     'if [ -f /opt/ogb/cua-ready ] && ! pgrep -f "computer_server" >/dev/null 2>&1; then DISPLAY=${DISPLAY:-:0} nohup /opt/ogb/venv/bin/python -m computer_server --host 127.0.0.1 --port 8000 --width 1280 --height 800 > /tmp/ogb-cua-server.log 2>&1 & fi',
-    `tmux has-session -t work 2>/dev/null || tmux new-session -d -s work 'echo; echo "  ▦ ${label}'"'"'s computer — OpenMausBot"; echo; exec bash -i'`,
+    `tmux has-session -t work 2>/dev/null || tmux new-session -d -s work 'echo; echo "  ▦ ${label}'"'"'s computer — Aishe"; echo; exec bash -i'`,
     "echo bootstrapped",
   ].join("\n");
   let boot;

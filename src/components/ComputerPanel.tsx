@@ -11,8 +11,10 @@ import {
   Loader2,
   Monitor,
   Moon,
+  Play,
   Power,
   Settings,
+  Trash2,
   X,
 } from "lucide-react";
 import { useStore, type Bot } from "@/state/store";
@@ -40,6 +42,270 @@ type Phase =
   | "local-unavailable"
   | "off"
   | "error";
+
+type Routine = {
+  id: string;
+  name: string;
+  instruction: string;
+  kind: "daily" | "interval";
+  hour?: number;
+  minute?: number;
+  timezone?: string;
+  intervalMinutes?: number;
+  enabled: boolean;
+  nextRunAt: number;
+  lastRunAt: number | null;
+};
+
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+
+function scheduleLabel(r: Routine): string {
+  if (r.kind === "interval") {
+    const m = r.intervalMinutes ?? 60;
+    if (m % 60 === 0) return `Every ${m / 60}h`;
+    return `Every ${m} min`;
+  }
+  const tz = r.timezone ? ` ${r.timezone.replace(/_/g, " ")}` : "";
+  return `Daily at ${pad2(r.hour ?? 9)}:${pad2(r.minute ?? 0)}${tz}`;
+}
+
+function RoutinesSection({ botId }: { botId: string }) {
+  const [rows, setRows] = useState<Routine[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [instruction, setInstruction] = useState("");
+  const [kind, setKind] = useState<"daily" | "interval">("daily");
+  const [time, setTime] = useState("09:00");
+  const [intervalHours, setIntervalHours] = useState("1");
+
+  const load = () => {
+    setLoading(true);
+    return api(`/api/bots/${botId}/routines`)
+      .then((d) => {
+        setRows(d.routines ?? []);
+        setError(null);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [botId]);
+
+  const create = async () => {
+    setBusyId("create");
+    try {
+      const [h, mi] = time.split(":").map(Number);
+      const hours = Math.max(0.25, Number(intervalHours) || 1);
+      await api(`/api/bots/${botId}/routines`, {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          instruction,
+          kind,
+          hour: h,
+          minute: mi,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          intervalMinutes: Math.round(hours * 60),
+        }),
+      });
+      setName("");
+      setInstruction("");
+      setCreating(false);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const patch = async (id: string, body: Record<string, unknown>) => {
+    setBusyId(id);
+    try {
+      await api(`/api/bots/${botId}/routines/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const remove = async (id: string) => {
+    setBusyId(id);
+    try {
+      await api(`/api/bots/${botId}/routines/${id}`, { method: "DELETE" });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const runNow = async (id: string) => {
+    setBusyId(id);
+    try {
+      await api(`/api/bots/${botId}/routines/${id}/run`, { method: "POST" });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const inputClass =
+    "w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none";
+
+  return (
+    <div className="mt-4 rounded-xl border border-hairline/40 bg-card p-4">
+      <div className="flex items-center gap-2 text-[15px] font-medium text-ink">
+        <CalendarClock size={16} className="text-ink-secondary" />
+        Routines
+      </div>
+      <div className="mt-1 text-[13px] leading-snug text-ink-secondary">
+        Recurring tasks this bot runs on a schedule — same as sending the instruction in chat.
+      </div>
+      {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
+
+      {loading && !rows.length ? (
+        <div className="mt-3 flex items-center gap-2 text-[13px] text-ink-secondary">
+          <Loader2 size={14} className="animate-spin" /> Loading…
+        </div>
+      ) : rows.length === 0 && !creating ? (
+        <div className="mt-3 rounded-lg bg-inset px-3 py-2.5 text-[12px] text-ink-secondary">
+          No routines yet. Name one, write the instruction, and pick a schedule.
+        </div>
+      ) : (
+        <div className="mt-3 flex flex-col gap-2">
+          {rows.map((r) => (
+            <div key={r.id} className="rounded-lg border border-hairline/30 bg-inset px-3 py-2.5">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="truncate text-[13px] font-medium text-ink">{r.name}</div>
+                  <div className="mt-0.5 text-[12px] text-ink-secondary">{scheduleLabel(r)}</div>
+                  <div className="mt-0.5 text-[11px] text-ink-secondary">
+                    Next {new Date(r.nextRunAt).toLocaleString()}
+                    {r.lastRunAt ? ` · last ${new Date(r.lastRunAt).toLocaleString()}` : ""}
+                  </div>
+                </div>
+                <label className="flex shrink-0 items-center gap-1.5 text-[12px] text-ink-secondary">
+                  <input
+                    type="checkbox"
+                    checked={r.enabled}
+                    disabled={busyId === r.id}
+                    onChange={(e) => void patch(r.id, { enabled: e.target.checked })}
+                  />
+                  On
+                </label>
+              </div>
+              <p className="mt-1.5 line-clamp-2 text-[12px] text-ink-secondary">{r.instruction}</p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  disabled={busyId === r.id}
+                  onClick={() => void runNow(r.id)}
+                  className="flex items-center gap-1 rounded-md bg-raised px-2 py-1 text-[12px] text-ink hover:bg-raised-hover disabled:opacity-40"
+                >
+                  <Play size={12} /> Run now
+                </button>
+                <button
+                  type="button"
+                  disabled={busyId === r.id}
+                  onClick={() => void remove(r.id)}
+                  className="flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-danger hover:bg-danger/10 disabled:opacity-40"
+                >
+                  <Trash2 size={12} /> Delete
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {creating ? (
+        <div className="mt-3 flex flex-col gap-2">
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" className={inputClass} />
+          <textarea
+            value={instruction}
+            onChange={(e) => setInstruction(e.target.value)}
+            placeholder="Instruction — what should the bot do?"
+            rows={3}
+            className={inputClass}
+          />
+          <div className="flex overflow-hidden rounded-lg border border-hairline/40">
+            {(
+              [
+                ["daily", "Daily"],
+                ["interval", "Every…"],
+              ] as const
+            ).map(([k, label], i) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setKind(k)}
+                className={cn(
+                  "flex-1 py-1.5 text-[13px]",
+                  i > 0 && "border-l border-hairline/40",
+                  kind === k ? "bg-raised text-ink" : "text-ink-secondary hover:text-ink",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {kind === "daily" ? (
+            <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className={inputClass} />
+          ) : (
+            <input
+              type="number"
+              min={0.25}
+              step={0.25}
+              value={intervalHours}
+              onChange={(e) => setIntervalHours(e.target.value)}
+              placeholder="Hours between runs"
+              className={inputClass}
+            />
+          )}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={busyId === "create" || !name.trim() || !instruction.trim()}
+              onClick={() => void create()}
+              className="flex-1 rounded-xl bg-accent py-2 text-[13px] font-medium text-white disabled:opacity-40"
+            >
+              {busyId === "create" ? "Saving…" : "Save routine"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setCreating(false)}
+              className="rounded-xl border border-hairline/40 px-3 py-2 text-[13px] text-ink-secondary"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setCreating(true)}
+          className="mt-4 w-full rounded-xl border border-hairline/60 bg-transparent py-2.5 text-[14px] font-medium text-ink hover:bg-raised/50"
+        >
+          Create Routine
+        </button>
+      )}
+    </div>
+  );
+}
 
 export function ComputerPanel({ bot, saasMode = false }: { bot: Bot; saasMode?: boolean }) {
   const { state, dispatch } = useStore();
@@ -367,27 +633,7 @@ export function ComputerPanel({ bot, saasMode = false }: { bot: Bot; saasMode?: 
           )}
         </div>
 
-        {/* Routines — UI parity with Grok; scheduling lands in a later phase */}
-        <div className="mt-4 rounded-xl border border-hairline/40 bg-card p-4">
-          <div className="flex items-center gap-2 text-[15px] font-medium text-ink">
-            <CalendarClock size={16} className="text-ink-secondary" />
-            Routines
-          </div>
-          <div className="mt-1 text-[13px] leading-snug text-ink-secondary">
-            Routines are recurring tasks this agent runs on a schedule.
-          </div>
-          <button
-            type="button"
-            disabled
-            className="mt-4 w-full cursor-not-allowed rounded-xl border border-hairline/60 bg-transparent py-2.5 text-[14px] font-medium text-ink-secondary"
-            title="Coming soon"
-          >
-            Create Routine
-          </button>
-          <div className="mt-3 rounded-lg bg-inset px-3 py-2.5 text-[12px] text-ink-secondary">
-            Coming soon — you&apos;ll name a routine, write the instruction, and add triggers here.
-          </div>
-        </div>
+        <RoutinesSection botId={bot.id} />
       </div>
     </aside>
   );

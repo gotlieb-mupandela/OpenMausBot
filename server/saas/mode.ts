@@ -11,7 +11,7 @@ export function sessionSecret(): string {
     // Local-dev fallback so `pnpm dev:saas` works out of the box.
     // Production MUST set OMB_SESSION_SECRET.
     console.warn("[saas] OMB_SESSION_SECRET unset — using insecure local default");
-    return "openmausbot-local-dev-secret-change-me";
+    return "aishe-local-dev-secret-change-me";
   }
   return "desktop";
 }

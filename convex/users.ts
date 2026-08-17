@@ -146,13 +146,15 @@ export const purgeAll = mutation({
   args: { secret: v.string() },
   handler: async (ctx, args) => {
     assertHarness(args.secret);
+    const routines = await ctx.db.query("routines").collect();
+    for (const r of routines) await ctx.db.delete(r._id);
     const messages = await ctx.db.query("messages").collect();
     for (const m of messages) await ctx.db.delete(m._id);
     const bots = await ctx.db.query("bots").collect();
     for (const b of bots) await ctx.db.delete(b._id);
     const users = await ctx.db.query("users").collect();
     for (const u of users) await ctx.db.delete(u._id);
-    return { messages: messages.length, bots: bots.length, users: users.length };
+    return { routines: routines.length, messages: messages.length, bots: bots.length, users: users.length };
   },
 });
 

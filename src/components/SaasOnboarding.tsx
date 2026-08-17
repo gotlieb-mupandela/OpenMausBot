@@ -17,7 +17,7 @@ type Step = {
 const STEPS: Step[] = [
   {
     id: "welcome",
-    title: "Welcome to OpenMausBot",
+    title: "Welcome to Aishe",
     body: "Your AI bot team lives in the cloud — each bot gets its own personality, tools, and a real computer. This quick tour shows you around.",
     icon: <Sparkles size={22} className="text-accent" />,
   },

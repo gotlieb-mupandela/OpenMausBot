@@ -22,7 +22,7 @@ if (reset) {
   console.log("Reset onboarding for", uid);
 }
 
-const secret = process.env.OMB_SESSION_SECRET || "local-dev-secret-openmausbot";
+const secret = process.env.OMB_SESSION_SECRET || "local-dev-secret-aishe";
 const payload = { uid, exp: Date.now() + 86400000 };
 const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
 const sig = createHmac("sha256", secret).update(body).digest("base64url");
