@@ -23,6 +23,7 @@ import * as google from "./saas/google.ts";
 import * as polar from "./saas/polar.ts";
 import { TenantStores } from "./saas/tenants.ts";
 import * as routines from "./saas/routines.ts";
+import { FREE_BOT_LIMIT, plusRequiredPayload, plusUnlocked } from "./saas/plan.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -376,17 +377,20 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
     try {
       if (dispatchAbort.signal.aborted) return;
 
+      let plus = !SAAS_MODE || userId === "__desktop__";
+      if (!plus) plus = plusUnlocked(await auth.findUserById(userId));
+
       const light = composio.isLightChatTurn(text);
       const recentUserTexts = transcript
         .filter((m) => m.role === "user")
         .map((m) => m.text)
         .slice(-8);
-      const pluginIntent = composio.resolvePluginIntent(text, recentUserTexts);
-      const explicitComputer = composio.messageNeedsComputer(text);
+      const pluginIntent = plus ? composio.resolvePluginIntent(text, recentUserTexts) : null;
+      const explicitComputer = plus && composio.messageNeedsComputer(text);
 
       // Resolve connected apps early so email/calendar turns can skip the desktop.
       let connectedSlugs: string[] = [];
-      if (composio.connectorsConfigured(cfg) && !light) {
+      if (plus && composio.connectorsConfigured(cfg) && !light) {
         connectedSlugs = await Promise.race([
           composio
             .listConnectedToolkitSlugs(cfg, SAAS_MODE && userId !== "__desktop__" ? userId : undefined)
@@ -415,7 +419,7 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
       const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
       // Attach Composio whenever ck_ and/or ak_ is configured (ak_-only uses Platform tools).
       // Light greetings still get the integration stub — Ollama skips tool listing for light turns.
-      if (composio.connectorsConfigured(cfg)) {
+      if (plus && composio.connectorsConfigured(cfg)) {
         integrations.composio = {
           key: composio.resolveConnectKey(cfg),
           url: cfg.composio?.url,
@@ -438,7 +442,7 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
 
       // Never block chat on Box provision for messages that don't need a computer.
       // Attach existing boxes only when this turn actually needs desktop tools.
-      if (wants !== "off" && wants !== "local" && box.boxConfigured(cfg) && needsComputer) {
+      if (plus && wants !== "off" && wants !== "local" && box.boxConfigured(cfg) && needsComputer) {
         let b = await box.findBox(cfg, owner).catch(() => null);
         if (dispatchAbort.signal.aborted) return;
         const shouldAutoProvision =
@@ -487,7 +491,7 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
       // local computer (this Mac) via the Electron-hosted cua-driver: the
       // Electron main process owns the daemon (TCC attribution) and writes
       // its spawn contract to cua-connection.json; the harness only reads it
-      if (!integrations.computer && needsComputer && wants !== "off" && wants !== "cloud") {
+      if (plus && !integrations.computer && needsComputer && wants !== "off" && wants !== "cloud") {
         const cua = readCuaConnection();
         if (cua) integrations.localComputer = cua;
       }
@@ -499,6 +503,7 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
       // without it must not be told about tools it cannot call. Any bot can
       // still be the TARGET of ask_bot regardless of its driver.
       if (
+        plus &&
         commsDepth < MAX_COMMS_DEPTH &&
         instance.adapter.capabilities.agentsMcp === true &&
         store.bots.filter((b) => b.id !== bot.id && !b.hidden).length > 0
@@ -589,6 +594,9 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
           persona +
           pluginsHint +
           sharedDesktopHint +
+          (plus
+            ? ""
+            : " The user is on the Free plan: one bot and chat only. No cloud computer, plugins, scheduled routines, or talking to other bots. If they ask for those, tell them to upgrade to Aishe Plus (N$350/month) from App Settings.") +
           (integrations.agents
             ? " You can work with the user's other bots through the agents tools — list_bots shows who's available, ask_bot sends one of them a message and returns their reply."
             : "") +
@@ -815,6 +823,12 @@ const server = createServer(async (req, res) => {
         if (toBotId === fromBotId) return json(res, 400, { error: "a bot cannot message itself" });
         if (depth >= MAX_COMMS_DEPTH) return json(res, 200, { error: "message chains are limited to one hop" });
         const owned = tenants.findByBotId(fromBotId) ?? { userId: "__desktop__", store: desktopStore };
+        if (SAAS_MODE && owned.userId !== "__desktop__") {
+          const ownerUser = await auth.findUserById(owned.userId);
+          if (!plusUnlocked(ownerUser)) {
+            return json(res, 200, { error: "Aishe Plus is required for bots to talk to each other." });
+          }
+        }
         const s = owned.store;
         const target = s.bot(toBotId);
         if (!target) return json(res, 404, { error: "no such bot" });
@@ -875,6 +889,13 @@ const server = createServer(async (req, res) => {
       });
     }
     if (method === "POST" && path === "/api/bots") {
+      if (
+        SAAS_MODE &&
+        !plusUnlocked(saasUser) &&
+        store.bots.filter((b) => !b.hidden).length >= FREE_BOT_LIMIT
+      ) {
+        return json(res, 402, plusRequiredPayload("Extra bots"));
+      }
       const bot = store.createBot();
       store.patchBot(bot.id, { modelSelection: await defaultSelection() });
       return json(res, 201, { bot: { ...store.bot(bot.id)!, messages: store.messagesFor(bot.threadId) } });
@@ -936,6 +957,7 @@ const server = createServer(async (req, res) => {
     if (m && method === "POST") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      if (SAAS_MODE && !plusUnlocked(saasUser)) return json(res, 402, plusRequiredPayload("Routines"));
       const uid = saasUser?.id ?? "__desktop__";
       const body = await readBody(req);
       const created = await routines.createRoutine(uid, bot.id, {
@@ -954,6 +976,7 @@ const server = createServer(async (req, res) => {
     if (m && method === "POST") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      if (SAAS_MODE && !plusUnlocked(saasUser)) return json(res, 402, plusRequiredPayload("Routines"));
       const uid = saasUser?.id ?? "__desktop__";
       const row = await routines.getRoutine(uid, m[2]);
       if (!row || row.botId !== bot.id) return json(res, 404, { error: "no such routine" });
@@ -965,6 +988,7 @@ const server = createServer(async (req, res) => {
     if (m && method === "PATCH") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      if (SAAS_MODE && !plusUnlocked(saasUser)) return json(res, 402, plusRequiredPayload("Routines"));
       const uid = saasUser?.id ?? "__desktop__";
       const body = await readBody(req);
       const updated = await routines.patchRoutine(uid, m[2], {
@@ -983,6 +1007,7 @@ const server = createServer(async (req, res) => {
     if (m && method === "DELETE") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      if (SAAS_MODE && !plusUnlocked(saasUser)) return json(res, 402, plusRequiredPayload("Routines"));
       const uid = saasUser?.id ?? "__desktop__";
       const row = await routines.getRoutine(uid, m[2]);
       if (!row || row.botId !== bot.id) return json(res, 404, { error: "no such routine" });
@@ -1131,6 +1156,7 @@ const server = createServer(async (req, res) => {
     }
     m = path.match(/^\/api\/connectors\/([\w-]+)\/authorize$/);
     if (m && method === "POST") {
+      if (SAAS_MODE && !plusUnlocked(saasUser)) return json(res, 402, plusRequiredPayload("Plugins"));
       try {
         const out = await composio.authorizeService(cfg, m[1], saasUser?.id);
         composio.clearToolsCache();
@@ -1165,6 +1191,7 @@ const server = createServer(async (req, res) => {
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/computer\/(provision|join|sleep|exec|screenshot)$/);
     if (m && method === "POST") {
+      if (SAAS_MODE && !plusUnlocked(saasUser)) return json(res, 402, plusRequiredPayload("Cloud computer"));
       const botId = m[1];
       const bot = store.bot(botId);
       if (!bot) return json(res, 404, { error: "no such bot" });
@@ -1227,6 +1254,8 @@ async function tickRoutines() {
     for (const row of due) {
       try {
         if (SAAS_MODE && row.userId !== "__desktop__") {
+          const ownerUser = await auth.findUserById(row.userId);
+          if (!plusUnlocked(ownerUser)) continue;
           await tenants.touch(row.userId);
         }
         const owned = SAAS_MODE

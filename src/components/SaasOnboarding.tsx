@@ -31,7 +31,7 @@ const STEPS: Step[] = [
   {
     id: "new-bot",
     title: "Create a bot",
-    body: "Tap + to spin up a new teammate. Pick a name, color, and mascot — they start ready to chat.",
+    body: "Tap + to spin up a teammate. Free includes one bot; Aishe Plus unlocks more.",
     icon: <Bot size={22} className="text-accent" />,
     target: '[data-tour="new-bot"]',
   },
@@ -52,21 +52,21 @@ const STEPS: Step[] = [
   {
     id: "computer",
     title: "Cloud computer",
-    body: "Open the monitor icon when a bot needs a real desktop — browse, code, and take screenshots in the cloud.",
+    body: "On Aishe Plus, open the monitor icon for a real cloud desktop — browse, code, and take screenshots.",
     icon: <Monitor size={22} className="text-accent" />,
     target: '[data-tour="computer"]',
   },
   {
     id: "plugins",
     title: "Plugins & apps",
-    body: "Connect Gmail, Slack, GitHub, and more so bots can act on your tools — no API keys to paste.",
+    body: "Plus connects Gmail, Slack, GitHub, and more so bots can act on your tools — no API keys to paste.",
     icon: <Puzzle size={22} className="text-accent" />,
     target: '[data-tour="plugins"]',
   },
   {
     id: "account",
     title: "Your account",
-    body: "Profile and sign-out live here. Everything else — AI, plugins, computer — is included.",
+    body: "Profile, plan, and sign-out live here. Upgrade to Plus anytime for computer, plugins, extra bots, and routines.",
     icon: <User size={22} className="text-accent" />,
     target: '[data-tour="account"]',
   },

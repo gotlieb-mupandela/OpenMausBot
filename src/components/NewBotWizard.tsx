@@ -11,6 +11,8 @@ import {
 } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 import { useMobileNav } from "@/lib/mobile-nav";
+import { useAccess } from "@/lib/access";
+import { PlusGate } from "./PlusGate";
 
 const PRESETS: Array<{
   id: string;
@@ -60,7 +62,9 @@ const PRESETS: Array<{
 ];
 
 export function NewBotWizard({ onClose }: { onClose: () => void }) {
-  const { dispatch } = useStore();
+  const { state, dispatch } = useStore();
+  const { plus } = useAccess();
+  const atFreeLimit = !plus && state.bots.filter((b) => !b.hidden).length >= 1;
   const { closeList } = useMobileNav();
   const [name, setName] = useState("New Bot");
   const [color, setColor] = useState<MausColor>("blue");
@@ -78,7 +82,7 @@ export function NewBotWizard({ onClose }: { onClose: () => void }) {
   };
 
   const start = () => {
-    if (busy) return;
+    if (busy || atFreeLimit) return;
     setBusy(true);
     dispatch({
       type: "newBot",
@@ -118,6 +122,10 @@ export function NewBotWizard({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8 sm:py-8">
+          {atFreeLimit ? (
+            <PlusGate feature="Extra bots" />
+          ) : (
+          <>
           <div className="mx-auto flex max-w-md flex-col items-center">
             <MausAvatar key={`${color}-${expression}`} color={color} state={expression} size={112} />
 
@@ -193,6 +201,8 @@ export function NewBotWizard({ onClose }: { onClose: () => void }) {
               ))}
             </div>
           </div>
+          </>
+          )}
         </div>
       </div>
     </div>

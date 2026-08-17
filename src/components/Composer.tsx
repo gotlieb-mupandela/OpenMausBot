@@ -5,6 +5,7 @@ import { useStore, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { MausAvatar } from "./Avatar";
 import { normalizeState } from "@/lib/mascot";
+import { useAccess } from "@/lib/access";
 import { browserSpeechSupported, startBrowserSpeech } from "@/lib/web-speech";
 
 /** The active @mention query at the caret: the text between an `@` that
@@ -93,6 +94,7 @@ const SLASH_COMMANDS: Array<{
 
 export function Composer({ bot }: { bot: Bot }) {
   const { state, dispatch } = useStore();
+  const { plus } = useAccess();
   const [text, setText] = useState("");
   const [recording, setRecording] = useState(false);
   const [speechError, setSpeechError] = useState<string | null>(null);
@@ -107,23 +109,24 @@ export function Composer({ bot }: { bot: Bot }) {
   // ── @mention picker (tag another bot; the agent reaches it via ask_bot) ──
   const mention = mentionQueryAt(text, caret);
   const candidates = useMemo(() => {
-    if (!mention || mention.start === dismissedAt) return [];
+    if (!plus || !mention || mention.start === dismissedAt) return [];
     const q = mention.query.trim().toLowerCase();
     return state.bots
       .filter((b) => b.id !== bot.id && !b.hidden)
       .filter((b) => !q || b.name.toLowerCase().includes(q))
       .slice(0, 6);
-  }, [mention, dismissedAt, state.bots, bot.id]);
+  }, [plus, mention, dismissedAt, state.bots, bot.id]);
   const pickerOpen = candidates.length > 0;
 
   const slash = slashQueryAt(text, caret);
   const slashItems = useMemo(() => {
     if (!slash || slash.start === slashDismissed) return [];
     const q = slash.query.toLowerCase();
-    return SLASH_COMMANDS.filter(
-      (c) => !q || c.id.includes(q) || c.label.toLowerCase().includes(q) || c.blurb.toLowerCase().includes(q),
-    ).slice(0, 8);
-  }, [slash, slashDismissed]);
+    return SLASH_COMMANDS.filter((c) => {
+      if (!plus && (c.id === "add-connector" || c.id === "plugins" || c.id === "computer")) return false;
+      return !q || c.id.includes(q) || c.label.toLowerCase().includes(q) || c.blurb.toLowerCase().includes(q);
+    }).slice(0, 8);
+  }, [plus, slash, slashDismissed]);
   const slashOpen = !pickerOpen && slashItems.length > 0;
 
   const locked = !state.connected;

@@ -15,6 +15,8 @@ import { AuthScreen, type SaasUser } from "@/components/AuthScreen";
 import { NewBotWizard } from "@/components/NewBotWizard";
 import { SaasOnboarding } from "@/components/SaasOnboarding";
 import { BillingSuccess } from "@/components/BillingSuccess";
+import { AccessProvider, useAccess } from "@/lib/access";
+import { PlusFeaturePanel, PlusGate } from "@/components/PlusGate";
 
 function Shell({
   saasMode,
@@ -26,6 +28,7 @@ function Shell({
   onReplayTour?: () => void;
 }) {
   const { state, dispatch } = useStore();
+  const { plus } = useAccess();
   const bot = state.bots.find((b) => b.id === state.selectedId) ?? state.bots[0];
   return (
     <div className="flex h-full flex-col">
@@ -61,11 +64,36 @@ function Shell({
           </main>
         )}
         {state.settingsOpen && bot && <SettingsPanel bot={bot} saasMode={saasMode} />}
-        {state.computerOpen && bot && <ComputerPanel bot={bot} saasMode={saasMode} />}
+        {state.computerOpen &&
+          bot &&
+          (saasMode && !plus ? (
+            <PlusFeaturePanel
+              title="Computer"
+              feature="Cloud computer"
+              onClose={() => dispatch({ type: "toggleComputer", open: false })}
+            />
+          ) : (
+            <ComputerPanel bot={bot} saasMode={saasMode} />
+          ))}
         {state.appSettingsOpen && (
           <AppSettingsPanel saasUser={saasUser} onReplayTour={onReplayTour} />
         )}
-        {state.pluginsOpen && <PluginsPanel saasMode={saasMode} />}
+        {state.pluginsOpen &&
+          (saasMode && !plus ? (
+            <div
+              className="absolute inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4"
+              onClick={() => dispatch({ type: "togglePlugins", open: false })}
+            >
+              <div
+                className="animate-pop-in w-full rounded-t-2xl border border-hairline/50 bg-panel p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-2xl sm:w-[min(420px,100%)] sm:rounded-2xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <PlusGate feature="Plugins" />
+              </div>
+            </div>
+          ) : (
+            <PluginsPanel saasMode={saasMode} />
+          ))}
       </div>
       {state.newBotWizardOpen && (
         <NewBotWizard onClose={() => dispatch({ type: "toggleNewBotWizard", open: false })} />
@@ -181,6 +209,7 @@ export default function App() {
 
   return (
     <StoreProvider>
+      <AccessProvider saas={saasMode} user={saasUser}>
       <MobileNavProvider>
         <Shell
           saasMode={saasMode}
@@ -198,6 +227,7 @@ export default function App() {
         )}
         {!saasMode && gated && <Onboarding onDone={() => setGated(false)} />}
       </MobileNavProvider>
+      </AccessProvider>
     </StoreProvider>
   );
 }

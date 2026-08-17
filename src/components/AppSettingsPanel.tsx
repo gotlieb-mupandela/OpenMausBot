@@ -139,8 +139,8 @@ export function AppSettingsPanel({
             <div className="text-[15px] font-medium text-ink">Aishe Plus</div>
             <div className="mt-0.5 text-[13px] text-ink-secondary">
               {saasUser.plus
-                ? "You're on Plus — N$350 / month."
-                : "N$350 / month. Subscribe with Polar to unlock Plus."}
+                ? "You're on Plus — extra bots, cloud computer, plugins, and routines."
+                : "Free is one bot and chat. Plus (N$350 / month) adds extra bots, cloud computer, plugins, routines, and bots that can talk to each other."}
             </div>
             {!saasUser.plus && (
               <a

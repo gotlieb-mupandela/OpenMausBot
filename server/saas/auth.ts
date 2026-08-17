@@ -131,16 +131,20 @@ function fromConvexRow(row: cx.ConvexUserRow): SaasUser {
   };
 }
 
+export function isPlus(
+  user: { polarSubscriptionId?: string; subscriptionStatus: SubscriptionStatus } | null | undefined,
+): boolean {
+  if (!user?.polarSubscriptionId) return false;
+  return user.subscriptionStatus === "active" || user.subscriptionStatus === "trialing";
+}
+
 export function toPublic(user: SaasUser): PublicUser {
-  const plus =
-    Boolean(user.polarSubscriptionId) &&
-    (user.subscriptionStatus === "active" || user.subscriptionStatus === "trialing");
   return {
     id: user.id,
     email: user.email,
     name: user.name,
     needsOnboarding: user.onboardingCompletedAt === null,
-    plus,
+    plus: isPlus(user),
     subscriptionStatus: user.subscriptionStatus,
   };
 }

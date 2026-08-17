@@ -19,6 +19,7 @@ import { MausAvatar, InitialsAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
 import { useMobileNav } from "@/lib/mobile-nav";
+import { useAccess } from "@/lib/access";
 
 const isElectron = navigator.userAgent.includes("Electron");
 
@@ -63,6 +64,7 @@ function BotContextMenu({
 }) {
   const { state, dispatch } = useStore();
   const { closeList } = useMobileNav();
+  const { plus } = useAccess();
   const bot = state.bots.find((b) => b.id === menu.botId);
 
   useEffect(() => {
@@ -136,9 +138,13 @@ function BotContextMenu({
           closeList();
           dispatch({ type: "toggleSettings", open: true });
         }),
-        item(<Copy size={16} className="text-ink-secondary" />, "Duplicate", () =>
-          dispatch({ type: "duplicateBot", botId: bot.id }),
-        ),
+        item(<Copy size={16} className="text-ink-secondary" />, "Duplicate", () => {
+          if (saasMode && !plus) {
+            window.location.href = "/api/billing/checkout";
+            return;
+          }
+          dispatch({ type: "duplicateBot", botId: bot.id });
+        }, saasMode && !plus ? { hint: "Aishe Plus" } : undefined),
         ...(saasMode
           ? []
           : [
