@@ -179,8 +179,9 @@ export function Composer({ bot }: { bot: Bot }) {
         return;
       }
       if (typeof line.text === "string") {
-        const base = baseText.current;
-        setText(base ? `${base} ${line.text}` : line.text);
+        const spoken = line.text.trim();
+        const base = baseText.current.trim();
+        setText(base && spoken ? `${base} ${spoken}` : spoken || base);
       }
     };
 
