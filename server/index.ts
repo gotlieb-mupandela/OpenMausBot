@@ -760,6 +760,10 @@ const server = createServer(async (req, res) => {
       return json(res, 404, { error: "unknown auth endpoint" });
     }
 
+    if (method === "GET" && path === "/api/health") {
+      return json(res, 200, { app: "aishe", pid: process.pid, static: Boolean(STATIC_DIR) });
+    }
+
     if (SAAS_MODE && method === "GET" && path === "/api/saas") {
       return json(res, 200, { mode: "saas", googleAuth: google.googleConfigured() });
     }
@@ -1068,13 +1072,6 @@ const server = createServer(async (req, res) => {
       store.patchBot(bot.id, { busy: false });
       broadcastUser({ kind: "bot", bot: store.bot(bot.id) });
       return json(res, 200, { ok: true });
-    }
-
-    // identity handshake for the packaged app's port fallback: the forked
-    // child proves it is OURS by echoing its pid (a stray dev server has
-    // the same API shape but a different pid)
-    if (method === "GET" && path === "/api/health") {
-      return json(res, 200, { app: "aishe", pid: process.pid, static: Boolean(STATIC_DIR) });
     }
 
     // ── provider instances (model picker) ──

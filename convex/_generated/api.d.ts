@@ -9,6 +9,8 @@
  */
 
 import type * as bots from "../bots.js";
+import type * as crons from "../crons.js";
+import type * as keepalive from "../keepalive.js";
 import type * as messages from "../messages.js";
 import type * as routines from "../routines.js";
 import type * as users from "../users.js";
@@ -21,6 +23,8 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   bots: typeof bots;
+  crons: typeof crons;
+  keepalive: typeof keepalive;
   messages: typeof messages;
   routines: typeof routines;
   users: typeof users;
