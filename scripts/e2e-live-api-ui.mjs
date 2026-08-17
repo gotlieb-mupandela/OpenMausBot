@@ -57,8 +57,8 @@ const login = await req("/api/auth/login", {
 });
 mark(
   "login_api",
-  login.status === 200 && login.body?.user?.canChat === true,
-  `status=${login.status} canChat=${login.body?.user?.canChat} sub=${login.body?.user?.subscriptionStatus}`,
+  login.status === 200 && login.body?.user?.email === EMAIL,
+  `status=${login.status} email=${login.body?.user?.email}`,
 );
 
 const me = await req("/api/auth/me");
@@ -298,13 +298,6 @@ report.notes.push(`botDetailKeys=${Object.keys(botDetail.body || {}).join(",")}`
     mark("computer_screenshot", false, "skipped");
   }
 }
-
-// Billing: canChat means banner hidden
-mark(
-  "billing_banner",
-  login.body?.user?.canChat === true,
-  "canChat true ⇒ BillingBanner returns null in UI",
-);
 
 // Create second bot via API if supported
 {

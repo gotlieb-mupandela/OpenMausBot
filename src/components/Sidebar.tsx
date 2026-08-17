@@ -263,6 +263,7 @@ export function Sidebar({ saasMode = false }: { saasMode?: boolean }) {
             dispatch({ type: "toggleNewBotWizard", open: true });
             closeList();
           }}
+          data-tour="new-bot"
           className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
           title="New bot"
@@ -285,7 +286,7 @@ export function Sidebar({ saasMode = false }: { saasMode?: boolean }) {
       </div>
 
       {/* Bot list */}
-      <div className="flex-1 overflow-y-auto px-2">
+      <div className="flex-1 overflow-y-auto px-2" data-tour="sidebar-bots">
         <div className="flex flex-col gap-0.5">
           {visibleBots.length === 0 ? (
             <div className="px-3 py-8 text-center text-[13px] text-ink-secondary">
@@ -301,6 +302,7 @@ export function Sidebar({ saasMode = false }: { saasMode?: boolean }) {
       <div className="space-y-0.5 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2">
         <button
           onClick={() => dispatch({ type: "togglePlugins", open: true })}
+          data-tour="plugins"
           className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-raised/50"
         >
           <Puzzle size={20} className="text-ink-secondary" />
@@ -309,6 +311,7 @@ export function Sidebar({ saasMode = false }: { saasMode?: boolean }) {
         <div className="flex items-center gap-1">
           <button
             onClick={() => dispatch({ type: "toggleAppSettings" })}
+            data-tour="account"
             className="flex min-w-0 flex-1 items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-raised/50"
           >
             <InitialsAvatar initials={profileInitials(state.config?.profile)} size={28} />

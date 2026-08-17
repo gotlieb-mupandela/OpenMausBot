@@ -17,7 +17,7 @@ import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { mentionedBots, type Message } from "./store.ts";
-import { SAAS_MODE, SAAS_HOST, SAAS_PLAN } from "./saas/mode.ts";
+import { SAAS_MODE, SAAS_HOST } from "./saas/mode.ts";
 import * as auth from "./saas/auth.ts";
 import * as google from "./saas/google.ts";
 import { TenantStores } from "./saas/tenants.ts";
@@ -717,11 +717,18 @@ const server = createServer(async (req, res) => {
         await tenants.touch(user.id);
         return json(res, 200, { user: auth.toPublic(user), mode: "saas" });
       }
+      if (method === "POST" && path === "/api/auth/onboarding-complete") {
+        const user = await auth.userFromRequest(req);
+        if (!user) return json(res, 401, { error: "unauthorized", mode: "saas" });
+        const updated = await auth.completeOnboarding(user.id);
+        if (!updated) return json(res, 404, { error: "user not found" });
+        return json(res, 200, { user: auth.toPublic(updated) });
+      }
       return json(res, 404, { error: "unknown auth endpoint" });
     }
 
     if (SAAS_MODE && method === "GET" && path === "/api/saas") {
-      return json(res, 200, { mode: "saas", plan: SAAS_PLAN, googleAuth: google.googleConfigured() });
+      return json(res, 200, { mode: "saas", googleAuth: google.googleConfigured() });
     }
 
     // ── resolve tenant store ───────────────────────────────────────────
@@ -735,30 +742,6 @@ const server = createServer(async (req, res) => {
       sseUserId = saasUser.id;
     }
     const broadcastUser = (payload: unknown) => broadcastTo(sseUserId, payload);
-
-    // ── billing (SaaS) ─────────────────────────────────────────────────
-    if (SAAS_MODE && path.startsWith("/api/billing/")) {
-      if (method === "GET" && path === "/api/billing/status") {
-        return json(res, 200, {
-          user: auth.toPublic(saasUser!),
-          plan: SAAS_PLAN,
-          stripeConfigured: Boolean(process.env.STRIPE_SECRET_KEY),
-        });
-      }
-      if (method === "POST" && path === "/api/billing/checkout") {
-        // Local / until Stripe keys exist: activate a paid month immediately.
-        // When STRIPE_SECRET_KEY is set, replace this with Stripe Checkout.
-        if (process.env.STRIPE_SECRET_KEY) {
-          return json(res, 501, {
-            error: "Stripe Checkout not wired yet — set up a Price and replace this stub",
-            plan: SAAS_PLAN,
-          });
-        }
-        const updated = await auth.activateLocalSubscription(saasUser!.id);
-        return json(res, 200, { user: auth.toPublic(updated!), local: true });
-      }
-      return json(res, 404, { error: "unknown billing endpoint" });
-    }
 
     // ── internal peer-agent comms (localhost + shared token only) ──────
     // The agents-proxy (spawned inside a bot's agent process) calls these to
@@ -846,9 +829,6 @@ const server = createServer(async (req, res) => {
       });
     }
     if (method === "POST" && path === "/api/bots") {
-      if (SAAS_MODE && saasUser && !auth.canChat(saasUser)) {
-        return json(res, 402, { error: "subscription required", plan: SAAS_PLAN });
-      }
       const bot = store.createBot();
       store.patchBot(bot.id, { modelSelection: await defaultSelection() });
       return json(res, 201, { bot: { ...store.bot(bot.id)!, messages: store.messagesFor(bot.threadId) } });
@@ -902,9 +882,6 @@ const server = createServer(async (req, res) => {
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/messages$/);
     if (m && method === "POST") {
-      if (SAAS_MODE && saasUser && !auth.canChat(saasUser)) {
-        return json(res, 402, { error: "subscription required — start your plan to chat", plan: SAAS_PLAN });
-      }
       const body = await readBody(req);
       const text = String(body.text ?? "").trim();
       if (!text) return json(res, 400, { error: "text required" });

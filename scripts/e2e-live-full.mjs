@@ -110,14 +110,7 @@ try {
     mark("login_session", true, "composer visible after login/session");
   }
 
-  // Hard refresh persistence check later; billing banner while canChat
-  const billingNag = await page.getByText(/Trial ended|Subscription required|Subscribe ·/).count();
-  mark(
-    "billing_banner",
-    billingNag === 0,
-    billingNag === 0 ? "hidden while canChat (expected)" : "banner visible despite login",
-  );
-
+  // Hard refresh persistence check later
   // ── Chat: hi ─────────────────────────────────────────────────────
   if (hasComposer) {
     // Prefer email bot if listed

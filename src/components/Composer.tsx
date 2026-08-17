@@ -91,7 +91,7 @@ const SLASH_COMMANDS: Array<{
   },
 ];
 
-export function Composer({ bot, canChat = true }: { bot: Bot; canChat?: boolean }) {
+export function Composer({ bot }: { bot: Bot }) {
   const { state, dispatch } = useStore();
   const [text, setText] = useState("");
   const [recording, setRecording] = useState(false);
@@ -126,7 +126,7 @@ export function Composer({ bot, canChat = true }: { bot: Bot; canChat?: boolean 
   }, [slash, slashDismissed]);
   const slashOpen = !pickerOpen && slashItems.length > 0;
 
-  const locked = !canChat || !state.connected;
+  const locked = !state.connected;
   const canSend = Boolean(text.trim()) && !bot.busy && !locked;
 
   useEffect(() => setHighlight(0), [mention?.start, mention?.query, slash?.start, slash?.query]);
@@ -233,7 +233,7 @@ export function Composer({ bot, canChat = true }: { bot: Bot; canChat?: boolean 
   };
 
   return (
-    <div className="px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:px-5 sm:pb-5">
+    <div className="px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:px-5 sm:pb-5" data-tour="composer">
       {speechError && (
         <div className="mx-auto mb-2 max-w-[900px] rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[12px] text-warning">
           {speechError}
@@ -366,13 +366,11 @@ export function Composer({ bot, canChat = true }: { bot: Bot; canChat?: boolean 
             placeholder={
               !state.connected
                 ? "Reconnecting…"
-                : !canChat
-                  ? "Subscribe to continue chatting"
-                  : recording
-                    ? "Listening…"
-                    : bot.busy
-                      ? `${bot.name} is working…`
-                      : `Message ${bot.name}`
+                : recording
+                  ? "Listening…"
+                  : bot.busy
+                    ? `${bot.name} is working…`
+                    : `Message ${bot.name}`
             }
             className="max-h-32 min-h-[24px] w-full resize-none bg-transparent py-1.5 text-[15px] leading-snug text-ink placeholder:text-ink-secondary focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
           />
@@ -402,7 +400,7 @@ export function Composer({ bot, canChat = true }: { bot: Bot; canChat?: boolean 
                   ? "animate-pulse bg-danger/20 text-danger"
                   : "text-ink-secondary hover:bg-raised hover:text-ink disabled:opacity-40",
               )}
-              title={locked ? (!canChat ? "Subscribe to continue" : "Reconnecting") : recording ? "Stop dictation (Esc)" : "Dictate"}
+              title={locked ? "Reconnecting" : recording ? "Stop dictation (Esc)" : "Dictate"}
             >
               <Mic size={18} />
             </button>

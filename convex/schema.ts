@@ -38,6 +38,8 @@ export default defineSchema({
     stripeCustomerId: v.optional(v.string()),
     stripeSubscriptionId: v.optional(v.string()),
     googleId: v.optional(v.string()),
+    /** null = first-run tour pending; number = completed at (ms); omit = legacy user */
+    onboardingCompletedAt: v.optional(v.union(v.number(), v.null())),
   }).index("by_email", ["email"]).index("by_googleId", ["googleId"]),
 
   bots: defineTable({

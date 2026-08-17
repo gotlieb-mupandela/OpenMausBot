@@ -34,6 +34,7 @@ export type ConvexUserRow = {
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;
   googleId?: string;
+  onboardingCompletedAt?: number | null;
 };
 
 export async function convexFindUserByEmail(email: string): Promise<ConvexUserRow | null> {
@@ -85,6 +86,14 @@ export async function convexUpsertGoogle(input: {
     secret: secret(),
     ...input,
   });
+}
+
+export async function convexCompleteOnboarding(userId: string): Promise<ConvexUserRow | null> {
+  const client = convexClient();
+  return (await client.mutation(api.users.completeOnboarding, {
+    secret: secret(),
+    userId: asUserId(userId),
+  })) as ConvexUserRow | null;
 }
 
 export async function convexPatchSubscription(

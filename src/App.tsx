@@ -12,28 +12,27 @@ import { AppSettingsPanel } from "@/components/AppSettingsPanel";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { MobileNavProvider } from "@/lib/mobile-nav";
 import { AuthScreen, type SaasUser } from "@/components/AuthScreen";
-import { BillingBanner } from "@/components/BillingBanner";
 import { NewBotWizard } from "@/components/NewBotWizard";
+import { SaasOnboarding } from "@/components/SaasOnboarding";
 
 function Shell({
   saasMode,
   saasUser,
-  onSaasUser,
+  onReplayTour,
 }: {
   saasMode: boolean;
   saasUser: SaasUser | null;
-  onSaasUser: (u: SaasUser) => void;
+  onReplayTour?: () => void;
 }) {
   const { state, dispatch } = useStore();
   const bot = state.bots.find((b) => b.id === state.selectedId) ?? state.bots[0];
   return (
     <div className="flex h-full flex-col">
       <UpdateBanner />
-      {saasUser && <BillingBanner user={saasUser} onUpdated={onSaasUser} />}
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <Sidebar saasMode={saasMode} />
         {bot ? (
-          <ChatView bot={bot} canChat={saasUser ? saasUser.canChat : true} />
+          <ChatView bot={bot} />
         ) : (
           <main className="flex h-full min-w-0 flex-1 flex-col items-center justify-center gap-3 bg-app px-6 text-center text-ink-secondary">
             {!state.connected ? (
@@ -62,7 +61,9 @@ function Shell({
         )}
         {state.settingsOpen && bot && <SettingsPanel bot={bot} saasMode={saasMode} />}
         {state.computerOpen && bot && <ComputerPanel bot={bot} saasMode={saasMode} />}
-        {state.appSettingsOpen && <AppSettingsPanel saasUser={saasUser} onSaasUser={onSaasUser} />}
+        {state.appSettingsOpen && (
+          <AppSettingsPanel saasUser={saasUser} onReplayTour={onReplayTour} />
+        )}
         {state.pluginsOpen && <PluginsPanel saasMode={saasMode} />}
       </div>
       {state.newBotWizardOpen && (
@@ -79,6 +80,11 @@ export default function App() {
   const [saasBootError, setSaasBootError] = useState<string | null>(null);
   const [googleAuth, setGoogleAuth] = useState(false);
   const [gated, setGated] = useState(() => !emailGateDone());
+  const [showSaasTour, setShowSaasTour] = useState(false);
+
+  useEffect(() => {
+    if (saasUser?.needsOnboarding) setShowSaasTour(true);
+  }, [saasUser?.needsOnboarding]);
 
   useEffect(() => {
     initAnalytics();
@@ -162,7 +168,20 @@ export default function App() {
   return (
     <StoreProvider>
       <MobileNavProvider>
-        <Shell saasMode={saasMode} saasUser={saasUser} onSaasUser={setSaasUser} />
+        <Shell
+          saasMode={saasMode}
+          saasUser={saasUser}
+          onReplayTour={saasMode ? () => setShowSaasTour(true) : undefined}
+        />
+        {saasMode && showSaasTour && saasUser && (
+          <SaasOnboarding
+            user={saasUser}
+            onDone={(updated) => {
+              setSaasUser(updated);
+              setShowSaasTour(false);
+            }}
+          />
+        )}
         {!saasMode && gated && <Onboarding onDone={() => setGated(false)} />}
       </MobileNavProvider>
     </StoreProvider>

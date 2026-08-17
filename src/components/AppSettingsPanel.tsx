@@ -1,4 +1,4 @@
-// App-level settings: profile, subscription, and (desktop only) credentials.
+// App-level settings: profile and (desktop only) credentials.
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useStore } from "@/state/store";
@@ -100,28 +100,16 @@ function UpdatesRow() {
 
 export function AppSettingsPanel({
   saasUser,
-  onSaasUser,
+  onReplayTour,
 }: {
   saasUser?: SaasUser | null;
-  onSaasUser?: (user: SaasUser) => void;
+  onReplayTour?: () => void;
 }) {
   const { dispatch } = useStore();
-  const [billingBusy, setBillingBusy] = useState(false);
 
   const logout = async () => {
     await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     window.location.reload();
-  };
-
-  const activate = async () => {
-    setBillingBusy(true);
-    try {
-      const res = await fetch("/api/billing/checkout", { method: "POST", credentials: "include" });
-      const data = await res.json();
-      if (res.ok && data.user) onSaasUser?.(data.user);
-    } finally {
-      setBillingBusy(false);
-    }
   };
 
   return (
@@ -147,37 +135,27 @@ export function AppSettingsPanel({
         </div>
 
         {saasUser ? (
-          <>
-            <div className="mt-4 rounded-xl bg-card p-4">
-              <div className="text-[15px] font-medium text-ink">Subscription</div>
-              <div className="mt-0.5 text-[13px] text-ink-secondary">
-                {saasUser.plan.name} · {saasUser.plan.priceLabel} · {saasUser.subscriptionStatus}
-                {saasUser.subscriptionEndsAt
-                  ? ` · until ${new Date(saasUser.subscriptionEndsAt).toLocaleDateString()}`
-                  : ""}
-              </div>
-              <p className="mt-2 text-[13px] text-ink-secondary">
-                AI, plugins, and a shared computer are included with your plan.
-              </p>
+          <div className="mt-4 rounded-xl bg-card p-4">
+            <div className="text-[15px] font-medium text-ink">Account</div>
+            <div className="mt-0.5 truncate text-[13px] text-ink-secondary">{saasUser.email}</div>
+            {onReplayTour && (
               <button
-                onClick={() => void activate()}
-                disabled={billingBusy || saasUser.subscriptionStatus === "active"}
-                className="mt-3 rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white disabled:opacity-40"
+                onClick={() => {
+                  dispatch({ type: "toggleAppSettings", open: false });
+                  onReplayTour();
+                }}
+                className="mt-3 w-full rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
               >
-                {saasUser.subscriptionStatus === "active" ? "Active" : `Activate · ${saasUser.plan.priceLabel}`}
+                Replay platform tour
               </button>
-            </div>
-            <div className="mt-4 rounded-xl bg-card p-4">
-              <div className="text-[15px] font-medium text-ink">Account</div>
-              <div className="mt-0.5 truncate text-[13px] text-ink-secondary">{saasUser.email}</div>
-              <button
-                onClick={() => void logout()}
-                className="mt-3 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
-              >
-                Log out
-              </button>
-            </div>
-          </>
+            )}
+            <button
+              onClick={() => void logout()}
+              className="mt-3 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
+            >
+              Log out
+            </button>
+          </div>
         ) : (
           <div className="mt-4 rounded-xl bg-card p-4">
             <div className="text-[15px] font-medium text-ink">Connections</div>

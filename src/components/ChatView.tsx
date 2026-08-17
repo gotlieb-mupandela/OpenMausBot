@@ -135,7 +135,7 @@ function buildFeed(messages: Message[], busy: boolean): FeedItem[] {
   return items;
 }
 
-export function ChatView({ bot, canChat = true }: { bot: Bot; canChat?: boolean }) {
+export function ChatView({ bot }: { bot: Bot }) {
   const { state, dispatch } = useStore();
   const { openList } = useMobileNav();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -193,6 +193,7 @@ export function ChatView({ bot, canChat = true }: { bot: Bot; canChat?: boolean 
           </button>
           <button
             onClick={() => dispatch({ type: "toggleSettings" })}
+            data-tour="bot-settings"
             className="flex min-w-0 items-center gap-2 rounded-lg px-1 py-1 hover:bg-raised/50 sm:gap-2.5 sm:px-1.5"
             title="Bot settings"
           >
@@ -221,6 +222,7 @@ export function ChatView({ bot, canChat = true }: { bot: Bot; canChat?: boolean 
           <ModelPicker bot={bot} />
           <button
             onClick={() => dispatch({ type: "toggleComputer" })}
+            data-tour="computer"
             className={cn(
               "rounded-md p-1.5 hover:bg-raised",
               state.computerOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
@@ -317,7 +319,7 @@ export function ChatView({ bot, canChat = true }: { bot: Bot; canChat?: boolean 
         </button>
       )}
 
-      <Composer bot={bot} canChat={canChat} />
+      <Composer bot={bot} />
     </main>
   );
 }

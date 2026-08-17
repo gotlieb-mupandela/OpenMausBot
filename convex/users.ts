@@ -59,7 +59,31 @@ export const create = mutation({
       createdAt: args.createdAt,
       subscriptionStatus: args.subscriptionStatus,
       subscriptionEndsAt: args.subscriptionEndsAt,
+      onboardingCompletedAt: null,
     });
+  },
+});
+
+export const completeOnboarding = mutation({
+  args: { secret: v.string(), userId: v.id("users") },
+  handler: async (ctx, args) => {
+    assertHarness(args.secret);
+    const user = await ctx.db.get(args.userId);
+    if (!user) return null;
+    const at = Date.now();
+    await ctx.db.patch(args.userId, { onboardingCompletedAt: at });
+    return await ctx.db.get(args.userId);
+  },
+});
+
+export const resetOnboarding = mutation({
+  args: { secret: v.string(), userId: v.id("users") },
+  handler: async (ctx, args) => {
+    assertHarness(args.secret);
+    const user = await ctx.db.get(args.userId);
+    if (!user) return null;
+    await ctx.db.patch(args.userId, { onboardingCompletedAt: null });
+    return await ctx.db.get(args.userId);
   },
 });
 
@@ -113,7 +137,22 @@ export const upsertGoogle = mutation({
       subscriptionStatus: args.subscriptionStatus,
       subscriptionEndsAt: args.subscriptionEndsAt,
       googleId: args.googleId,
+      onboardingCompletedAt: null,
     });
+  },
+});
+
+export const purgeAll = mutation({
+  args: { secret: v.string() },
+  handler: async (ctx, args) => {
+    assertHarness(args.secret);
+    const messages = await ctx.db.query("messages").collect();
+    for (const m of messages) await ctx.db.delete(m._id);
+    const bots = await ctx.db.query("bots").collect();
+    for (const b of bots) await ctx.db.delete(b._id);
+    const users = await ctx.db.query("users").collect();
+    for (const u of users) await ctx.db.delete(u._id);
+    return { messages: messages.length, bots: bots.length, users: users.length };
   },
 });
 

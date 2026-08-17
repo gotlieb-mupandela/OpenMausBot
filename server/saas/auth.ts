@@ -7,7 +7,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { DATA_DIR } from "../config.ts";
 import { newId } from "../contracts.ts";
-import { SAAS_PLAN, sessionSecret } from "./mode.ts";
+import { sessionSecret } from "./mode.ts";
 import * as cx from "./convex.ts";
 
 export type SubscriptionStatus = "trialing" | "active" | "past_due" | "canceled" | "none";
@@ -24,23 +24,21 @@ export interface SaasUser {
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;
   googleId?: string;
+  /** null = tour pending; number = done; undefined = legacy (skip tour) */
+  onboardingCompletedAt?: number | null;
 }
 
 export interface PublicUser {
   id: string;
   email: string;
   name: string;
-  subscriptionStatus: SubscriptionStatus;
-  subscriptionEndsAt: number | null;
-  plan: typeof SAAS_PLAN;
-  canChat: boolean;
+  needsOnboarding: boolean;
 }
 
 const USERS_DIR = join(DATA_DIR, "saas");
 const USERS_FILE = join(USERS_DIR, "users.json");
 const COOKIE = "omb_session";
 const SESSION_DAYS = 30;
-const TRIAL_DAYS = 14;
 
 type SessionPayload = { uid: string; exp: number };
 
@@ -123,15 +121,8 @@ function fromConvexRow(row: cx.ConvexUserRow): SaasUser {
     stripeCustomerId: row.stripeCustomerId,
     stripeSubscriptionId: row.stripeSubscriptionId,
     googleId: row.googleId,
+    onboardingCompletedAt: row.onboardingCompletedAt,
   };
-}
-
-export function canChat(user: SaasUser): boolean {
-  if (user.subscriptionStatus === "active" || user.subscriptionStatus === "trialing") {
-    if (user.subscriptionEndsAt != null && Date.now() > user.subscriptionEndsAt) return false;
-    return true;
-  }
-  return false;
 }
 
 export function toPublic(user: SaasUser): PublicUser {
@@ -139,10 +130,7 @@ export function toPublic(user: SaasUser): PublicUser {
     id: user.id,
     email: user.email,
     name: user.name,
-    subscriptionStatus: user.subscriptionStatus,
-    subscriptionEndsAt: user.subscriptionEndsAt,
-    plan: SAAS_PLAN,
-    canChat: canChat(user),
+    needsOnboarding: user.onboardingCompletedAt === null,
   };
 }
 
@@ -182,8 +170,8 @@ export async function createUser(input: {
   const passwordHash = hashPassword(input.password);
   const name = (input.name ?? "").trim() || email.split("@")[0]!;
   const createdAt = Date.now();
-  const subscriptionStatus = "trialing" as const;
-  const subscriptionEndsAt = Date.now() + TRIAL_DAYS * 24 * 60 * 60 * 1000;
+  const subscriptionStatus = "active" as const;
+  const subscriptionEndsAt = null;
 
   if (cx.convexConfigured()) {
     try {
@@ -203,6 +191,7 @@ export async function createUser(input: {
         createdAt,
         subscriptionStatus,
         subscriptionEndsAt,
+        onboardingCompletedAt: null,
       };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -221,14 +210,13 @@ export async function createUser(input: {
     createdAt,
     subscriptionStatus,
     subscriptionEndsAt,
+    onboardingCompletedAt: null,
   };
   const users = loadUsers();
   users.push(user);
   saveUsers(users);
   return user;
 }
-
-const TRIAL_MS = TRIAL_DAYS * 24 * 60 * 60 * 1000;
 
 export async function findOrCreateFromGoogle(input: {
   googleId: string;
@@ -244,8 +232,8 @@ export async function findOrCreateFromGoogle(input: {
       googleId: input.googleId,
       passwordHash: hashPassword(randomBytes(32).toString("hex")),
       createdAt: Date.now(),
-      subscriptionStatus: "trialing",
-      subscriptionEndsAt: Date.now() + TRIAL_MS,
+      subscriptionStatus: "active",
+      subscriptionEndsAt: null,
     });
     const row = await cx.convexFindUserById(id);
     if (!row) throw new Error("Google user missing after upsert");
@@ -274,9 +262,10 @@ export async function findOrCreateFromGoogle(input: {
     name,
     passwordHash: hashPassword(randomBytes(32).toString("hex")),
     createdAt: Date.now(),
-    subscriptionStatus: "trialing",
-    subscriptionEndsAt: Date.now() + TRIAL_MS,
+    subscriptionStatus: "active",
+    subscriptionEndsAt: null,
     googleId: input.googleId,
+    onboardingCompletedAt: null,
   };
   users.push(user);
   saveUsers(users);
@@ -291,30 +280,18 @@ export async function authenticate(email: string, password: string): Promise<Saa
   return user;
 }
 
-export async function setSubscription(
-  userId: string,
-  patch: Partial<
-    Pick<SaasUser, "subscriptionStatus" | "subscriptionEndsAt" | "stripeCustomerId" | "stripeSubscriptionId">
-  >,
-): Promise<SaasUser | null> {
+export async function completeOnboarding(userId: string): Promise<SaasUser | null> {
+  const at = Date.now();
   if (cx.convexConfigured()) {
-    const row = await cx.convexPatchSubscription(userId, patch);
+    const row = await cx.convexCompleteOnboarding(userId);
     return row ? fromConvexRow(row) : null;
   }
   const users = loadUsers();
   const idx = users.findIndex((u) => u.id === userId);
   if (idx === -1) return null;
-  users[idx] = { ...users[idx], ...patch };
+  users[idx] = { ...users[idx], onboardingCompletedAt: at };
   saveUsers(users);
   return users[idx];
-}
-
-/** Dev/local activate — marks the account paid without Stripe. */
-export async function activateLocalSubscription(userId: string): Promise<SaasUser | null> {
-  return setSubscription(userId, {
-    subscriptionStatus: "active",
-    subscriptionEndsAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
-  });
 }
 
 export function issueSession(res: ServerResponse, userId: string) {
