@@ -183,8 +183,8 @@ Optional, pasted once in **App Settings** (gear in the sidebar footer):
 
 | Key | Unlocks |
 |---|---|
-| Composio Connect key (`ck_…`) | The connected-apps marketplace |
-| Composio API key (`ak_…`) | The full 500+ app catalog with official logos |
+| Composio API key (`ak_…`) | Add apps (OAuth) + full marketplace catalog |
+| Composio Connect key (`ck_…`, optional) | Agent MCP tools via Connect |
 | Box token ([box.ascii.dev](https://box.ascii.dev)) | Cloud computers for your bots |
 
 ```sh

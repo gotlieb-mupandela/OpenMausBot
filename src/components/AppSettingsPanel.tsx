@@ -6,6 +6,8 @@ import { useEffect, useState } from "react";
 import { useStore } from "@/state/store";
 import { ApiKeyRow } from "./ApiKeys";
 import { useUpdaterState } from "@/lib/updater";
+import { PANEL_SHELL } from "@/lib/panel-shell";
+import type { SaasUser } from "./AuthScreen";
 
 /** Name + email, persisted to /api/config {profile} on blur. Prefilled from
  * the current config (the values are echoed back — they're not secrets). */
@@ -98,12 +100,35 @@ function UpdatesRow() {
   );
 }
 
-export function AppSettingsPanel() {
+export function AppSettingsPanel({
+  saasUser,
+  onSaasUser,
+}: {
+  saasUser?: SaasUser | null;
+  onSaasUser?: (user: SaasUser) => void;
+}) {
   const { dispatch } = useStore();
+  const [billingBusy, setBillingBusy] = useState(false);
+
+  const logout = async () => {
+    await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+    window.location.reload();
+  };
+
+  const activate = async () => {
+    setBillingBusy(true);
+    try {
+      const res = await fetch("/api/billing/checkout", { method: "POST", credentials: "include" });
+      const data = await res.json();
+      if (res.ok && data.user) onSaasUser?.(data.user);
+    } finally {
+      setBillingBusy(false);
+    }
+  };
 
   return (
-    <aside className="animate-panel-in flex h-full w-[400px] shrink-0 flex-col border-l border-hairline/40 bg-panel">
-      <div className="flex items-center justify-between px-4 py-3">
+    <aside className={PANEL_SHELL}>
+      <div className="flex items-center justify-between px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <span className="w-6" />
         <span className="text-[15px] font-semibold text-ink">App Settings</span>
         <button
@@ -114,7 +139,7 @@ export function AppSettingsPanel() {
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-5 pb-5">
+      <div className="flex-1 overflow-y-auto px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-5 sm:pb-5">
         <div className="mt-2 rounded-xl bg-card p-4">
           <div className="text-[15px] font-medium text-ink">Profile</div>
           <div className="mt-0.5 text-[13px] text-ink-secondary">Shown in the sidebar. Saved as you go.</div>
@@ -123,22 +148,86 @@ export function AppSettingsPanel() {
           </div>
         </div>
 
-        <div className="mt-4 rounded-xl bg-card p-4">
-          <div className="text-[15px] font-medium text-ink">Connections</div>
-          <div className="mt-0.5 text-[13px] text-ink-secondary">
-            Shared by all bots. Saving a key reloads providers instantly; keys are stored locally and never
-            shown again.
+        {saasUser ? (
+          <>
+            <div className="mt-4 rounded-xl bg-card p-4">
+              <div className="text-[15px] font-medium text-ink">Subscription</div>
+              <div className="mt-0.5 text-[13px] text-ink-secondary">
+                {saasUser.plan.name} · {saasUser.plan.priceLabel} · {saasUser.subscriptionStatus}
+                {saasUser.subscriptionEndsAt
+                  ? ` · until ${new Date(saasUser.subscriptionEndsAt).toLocaleDateString()}`
+                  : ""}
+              </div>
+              <p className="mt-2 text-[13px] text-ink-secondary">
+                Models are hosted for you — no API keys to manage. Stripe Checkout plugs in when
+                STRIPE_SECRET_KEY is set.
+              </p>
+              <button
+                onClick={() => void activate()}
+                disabled={billingBusy || saasUser.subscriptionStatus === "active"}
+                className="mt-3 rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white disabled:opacity-40"
+              >
+                {saasUser.subscriptionStatus === "active" ? "Active" : `Activate · ${saasUser.plan.priceLabel}`}
+              </button>
+            </div>
+            <div className="mt-4 rounded-xl bg-card p-4">
+              <div className="text-[15px] font-medium text-ink">Account</div>
+              <div className="mt-0.5 truncate text-[13px] text-ink-secondary">{saasUser.email}</div>
+              <button
+                onClick={() => void logout()}
+                className="mt-3 rounded-lg bg-raised px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
+              >
+                Log out
+              </button>
+            </div>
+            <div className="mt-4 rounded-xl bg-card p-4">
+              <div className="text-[15px] font-medium text-ink">Plugins</div>
+              <div className="mt-0.5 text-[13px] text-ink-secondary">
+                Paste your Composio project API key (
+                <code className="rounded bg-raised px-1">ak_…</code>) from Platform → project → Settings →
+                API Keys — enough to Add apps. Optional: Connect key (
+                <code className="rounded bg-raised px-1">ck_…</code>) from sidebar{" "}
+                <span className="font-medium">Install</span> (aka AI Clients) → your client → Your API Key.
+                Saving applies immediately (no restart).
+              </div>
+              <div className="mt-4 flex flex-col gap-4">
+                <ApiKeyRow
+                  section="composioApi"
+                  label="Composio API key (Add apps + catalog)"
+                  placeholder="ak_… from Platform → Settings → API Keys"
+                />
+                <ApiKeyRow
+                  section="composio"
+                  label="Composio Connect key (optional, agent MCP tools)"
+                  placeholder="ck_… from Install / AI Clients"
+                />
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="mt-4 rounded-xl bg-card p-4">
+            <div className="text-[15px] font-medium text-ink">Connections</div>
+            <div className="mt-0.5 text-[13px] text-ink-secondary">
+              Shared by all bots. Saving a key reloads providers instantly; keys are stored locally and never
+              shown again. For plugins, <code className="rounded bg-raised px-1">ak_…</code> alone is enough
+              to Add apps.
+            </div>
+            <div className="mt-4 flex flex-col gap-4">
+              <ApiKeyRow section="ollama" label="Ollama Cloud API key" placeholder="Key from ollama.com/settings/keys" />
+              <ApiKeyRow
+                section="composioApi"
+                label="Composio API key (Add apps + catalog)"
+                placeholder="ak_… from Platform → Settings → API Keys"
+              />
+              <ApiKeyRow
+                section="composio"
+                label="Composio Connect key (optional, agent MCP tools)"
+                placeholder="ck_… from Install / AI Clients"
+              />
+              <ApiKeyRow section="box" label="Box token" placeholder="Token from box.ascii.dev" />
+            </div>
           </div>
-          <div className="mt-4 flex flex-col gap-4">
-            <ApiKeyRow section="composio" label="Composio Connect key" placeholder="ck_…" />
-            <ApiKeyRow
-              section="composioApi"
-              label="Composio API key (optional)"
-              placeholder="ak_…  unlocks the full app catalog"
-            />
-            <ApiKeyRow section="box" label="Box token" placeholder="Token from box.ascii.dev" />
-          </div>
-        </div>
+        )}
 
         <UpdatesRow />
       </div>

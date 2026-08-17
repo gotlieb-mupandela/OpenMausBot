@@ -66,7 +66,8 @@ export interface Bot {
 /** GET /api/config — configured flags only; secrets are never echoed. */
 export interface ConfigStatus {
   xai?: { configured: boolean };
-  composio: { configured: boolean; apiKeyConfigured?: boolean };
+  ollama?: { configured: boolean };
+  composio: { configured: boolean; apiKeyConfigured?: boolean; connectorsReady?: boolean };
   box: { configured: boolean };
   /** who's using the app — collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string };
@@ -95,6 +96,7 @@ interface AppState {
   pluginsOpen: boolean;
   computerOpen: boolean;
   appSettingsOpen: boolean;
+  newBotWizardOpen: boolean;
   /** in-flight assistant text per threadId (content.delta fold) */
   streaming: Record<string, string>;
   /** latest live frame of a bot's computer, per botId */
@@ -118,7 +120,7 @@ type Action =
   | { type: "send"; botId: string; text: string }
   | { type: "answerCard"; botId: string; messageId: string; answer: string }
   | { type: "dismissCard"; botId: string; messageId: string }
-  | { type: "newBot" }
+  | { type: "newBot"; draft?: Partial<Pick<Bot, "name" | "title" | "description" | "color" | "mascotExpression" | "computer">> }
   | { type: "botAdded"; bot: Bot }
   | { type: "deleteBot"; botId: string }
   | { type: "duplicateBot"; botId: string }
@@ -138,6 +140,7 @@ type Action =
   | { type: "togglePlugins"; open?: boolean }
   | { type: "toggleComputer"; open?: boolean }
   | { type: "toggleAppSettings"; open?: boolean }
+  | { type: "toggleNewBotWizard"; open?: boolean }
   | {
       type: "updateBot";
       botId: string;
@@ -180,11 +183,31 @@ function patchCard(state: AppState, botId: string, messageId: string, patch: Par
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "hydrate": {
+      const prevById = new Map(state.bots.map((b) => [b.id, b]));
+      const bots = action.bots.map((serverBot) => {
+        const prev = prevById.get(serverBot.id);
+        if (!prev?.messages?.length) return serverBot;
+        const byId = new Map(serverBot.messages.map((m) => [m.id, m]));
+        for (const m of prev.messages) {
+          if (!byId.has(m.id)) byId.set(m.id, m);
+        }
+        const messages = [...byId.values()].sort((a, b) => a.at - b.at);
+        return {
+          ...serverBot,
+          messages,
+          // keep local busy if a turn just started and the snapshot lagged
+          busy: Boolean(serverBot.busy || prev.busy),
+        };
+      });
       const selectedId =
-        action.bots.some((b) => b.id === state.selectedId) && state.selectedId
+        bots.some((b) => b.id === state.selectedId) && state.selectedId
           ? state.selectedId
-          : (action.bots[0]?.id ?? "");
-      return { ...state, bots: action.bots, selectedId };
+          : (bots[0]?.id ?? "");
+      return {
+        ...state,
+        bots: bots.map((b) => (b.id === selectedId && b.unread ? { ...b, unread: false } : b)),
+        selectedId,
+      };
     }
     case "instances":
       return { ...state, instances: action.instances };
@@ -221,25 +244,39 @@ function reducer(state: AppState, action: Action): AppState {
       return updateBot(withMascotMotion(state, action.botId, "surprise"), action.botId, (b) => ({ ...b, unread: true }));
     case "botPatched": {
       const before = state.bots.find((b) => b.id === action.bot.id);
+      const patch = { ...action.bot };
+      // Never keep an unread badge on the chat you're already reading.
+      if (patch.unread && action.bot.id === state.selectedId) patch.unread = false;
       const kind =
-        action.bot.unread && !before?.unread
+        patch.unread && !before?.unread
           ? "surprise"
-          : action.bot.busy === true && !before?.busy
+          : patch.busy === true && !before?.busy
             ? "working"
-            : action.bot.busy === false && before?.busy
+            : patch.busy === false && before?.busy
               ? "celebrate"
               : null;
       const next = kind ? withMascotMotion(state, action.bot.id, kind) : state;
-      return updateBot(next, action.bot.id, (b) => ({ ...b, ...action.bot, messages: b.messages }));
+      return updateBot(next, action.bot.id, (b) => ({ ...b, ...patch, messages: b.messages }));
     }
     case "messageAdded": {
       const bot = state.bots.find((b) => b.threadId === action.threadId);
       if (!bot) return state;
-      const next = updateBot(state, bot.id, (b) =>
-        b.messages.some((m) => m.id === action.message.id)
-          ? b
-          : { ...b, messages: [...b.messages, action.message] },
-      );
+      const next = updateBot(state, bot.id, (b) => {
+        if (b.messages.some((m) => m.id === action.message.id)) return b;
+        // Swap out the optimistic local bubble when the server confirms it.
+        const withoutLocal =
+          action.message.role === "user"
+            ? b.messages.filter(
+                (m) =>
+                  !(
+                    m.id.startsWith("local-") &&
+                    m.role === "user" &&
+                    m.text === action.message.text
+                  ),
+              )
+            : b.messages;
+        return { ...b, messages: [...withoutLocal, action.message] };
+      });
       const motion =
         action.message.kind === "options"
           ? "thinking"
@@ -342,6 +379,8 @@ function reducer(state: AppState, action: Action): AppState {
         pluginsOpen: open ? false : state.pluginsOpen,
       };
     }
+    case "toggleNewBotWizard":
+      return { ...state, newBotWizardOpen: action.open ?? !state.newBotWizardOpen };
     case "updateBot": {
       const mascotChanged =
         Object.prototype.hasOwnProperty.call(action.patch, "color") ||
@@ -351,9 +390,23 @@ function reducer(state: AppState, action: Action): AppState {
         : state;
       return updateBot(next, action.botId, (b) => ({ ...b, ...action.patch }));
     }
-    // handled entirely by the async wrapper
-    case "send":
-      return withMascotMotion(state, action.botId, "working");
+    case "send": {
+      const optimistic: Message = {
+        id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        role: "user",
+        kind: "text",
+        text: action.text,
+        at: Date.now(),
+      };
+      return withMascotMotion(
+        updateBot(state, action.botId, (b) => ({
+          ...b,
+          messages: [...b.messages, optimistic],
+        })),
+        action.botId,
+        "working",
+      );
+    }
     case "newBot":
     case "duplicateBot":
     case "interrupt":
@@ -370,6 +423,7 @@ const initialState: AppState = {
   pluginsOpen: false,
   computerOpen: false,
   appSettingsOpen: false,
+  newBotWizardOpen: false,
   streaming: {},
   screens: {},
   provisioning: {},
@@ -381,6 +435,7 @@ const initialState: AppState = {
 // ── API client ─────────────────────────────────────────────────────────
 export async function api(path: string, init?: RequestInit): Promise<any> {
   const res = await fetch(path, {
+    credentials: "include",
     headers: { "content-type": "application/json" },
     ...init,
   });
@@ -411,6 +466,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const persistCard = (botId: string, messageId: string, patch: Partial<OptionCardData>) => {
       fetch(`/api/bots/${botId}/cards/${messageId}`, {
         method: "PATCH",
+        credentials: "include",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(patch),
       }).catch(() => {});
@@ -420,10 +476,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       rawDispatch(action);
       switch (action.type) {
         case "send":
-          api(`/api/bots/${action.botId}/messages`, {
-            method: "POST",
-            body: JSON.stringify({ text: action.text }),
-          }).catch(showError);
+          {
+            const botId = action.botId;
+            const text = action.text;
+            api(`/api/bots/${botId}/messages`, {
+              method: "POST",
+              body: JSON.stringify({ text }),
+            })
+              .then((r) => {
+                // Paint the user bubble from the HTTP response so chat updates
+                // even when the SSE proxy drops or buffers frames.
+                if (r?.message && r?.threadId) {
+                  rawDispatch({ type: "messageAdded", threadId: r.threadId, message: r.message });
+                }
+                const bot = stateRef.current.bots.find((b) => b.id === botId);
+                if (bot && !bot.busy) {
+                  rawDispatch({ type: "botPatched", bot: { id: botId, busy: true } });
+                }
+              })
+              .catch(showError);
+          }
           break;
         case "answerCard": {
           const bot = stateRef.current.bots.find((b) => b.id === action.botId);
@@ -444,7 +516,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             api(`/api/bots/${action.botId}/messages`, {
               method: "POST",
               body: JSON.stringify({ text: action.answer }),
-            }).catch(showError);
+            })
+              .then((r) => {
+                if (r?.message && r?.threadId) {
+                  rawDispatch({ type: "messageAdded", threadId: r.threadId, message: r.message });
+                }
+              })
+              .catch(showError);
           }
           break;
         }
@@ -461,11 +539,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           break;
         }
-        case "newBot":
+        case "newBot": {
+          const draft = action.draft;
           api("/api/bots", { method: "POST" })
-            .then(({ bot }) => rawDispatch({ type: "botAdded", bot }))
+            .then(async ({ bot }) => {
+              if (draft && Object.keys(draft).length) {
+                const { bot: patched } = await api(`/api/bots/${bot.id}`, {
+                  method: "PATCH",
+                  body: JSON.stringify(draft),
+                });
+                rawDispatch({
+                  type: "botAdded",
+                  bot: { ...bot, ...patched, messages: bot.messages },
+                });
+              } else {
+                rawDispatch({ type: "botAdded", bot });
+              }
+            })
             .catch(showError);
           break;
+        }
         case "duplicateBot": {
           const source = stateRef.current.bots.find((b) => b.id === action.botId);
           if (!source) break;
@@ -536,6 +629,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // ── initial load + SSE fold ──────────────────────────────────────────
   useEffect(() => {
     let alive = true;
+    let es: EventSource | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let backoffMs = 800;
+
     const loadAll = () => {
       api("/api/bots")
         .then(({ bots }) => alive && rawDispatch({ type: "hydrate", bots }))
@@ -549,74 +646,98 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
     loadAll();
 
-    const es = new EventSource("/api/events");
-    es.onopen = () => {
-      rawDispatch({ type: "connected", value: true });
-      loadAll(); // resync anything missed while disconnected
-    };
-    es.onerror = () => rawDispatch({ type: "connected", value: false });
-    es.onmessage = (raw) => {
-      let frame: any;
-      try {
-        frame = JSON.parse(raw.data);
-      } catch {
-        return;
-      }
-      switch (frame.kind) {
-        case "message":
-          rawDispatch({ type: "messageAdded", threadId: frame.threadId, message: frame.message });
-          break;
-        case "message.patch":
-          rawDispatch({ type: "messagePatched", threadId: frame.threadId, message: frame.message });
-          break;
-        case "bot": {
-          const bot = frame.bot as Partial<Bot> & { id: string };
-          // reading the selected chat clears its badge immediately
-          if (bot.unread && bot.id === stateRef.current.selectedId) {
-            bot.unread = false;
-            fetch(`/api/bots/${bot.id}`, {
-              method: "PATCH",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ unread: false }),
-            }).catch(() => {});
-          }
-          rawDispatch({ type: "botPatched", bot });
-          break;
+    const connect = () => {
+      if (!alive) return;
+      es?.close();
+      // Same-origin + cookies (SaaS session). withCredentials covers proxy edge cases.
+      es = new EventSource("/api/events", { withCredentials: true });
+      es.onopen = () => {
+        backoffMs = 800;
+        rawDispatch({ type: "connected", value: true });
+        loadAll(); // resync anything missed while disconnected
+      };
+      es.onerror = () => {
+        rawDispatch({ type: "connected", value: false });
+        // Browser auto-retries OPEN/CONNECTING; if CLOSED, reconnect ourselves.
+        if (!alive) return;
+        if (es && es.readyState === EventSource.CLOSED) {
+          es.close();
+          es = null;
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            connect();
+          }, backoffMs);
+          backoffMs = Math.min(12_000, Math.round(backoffMs * 1.6));
         }
-        case "runtime": {
-          const event = frame.event;
-          if (event.type === "content.delta" && event.streamKind === "assistant_text") {
-            rawDispatch({ type: "streamDelta", threadId: event.threadId, delta: event.delta });
-          } else if (event.type === "turn.completed") {
-            rawDispatch({ type: "streamClear", threadId: event.threadId });
-          }
-          break;
+      };
+      es.onmessage = (raw) => {
+        let frame: any;
+        try {
+          frame = JSON.parse(raw.data);
+        } catch {
+          return;
         }
-        case "screen":
-          rawDispatch({ type: "screenFrame", botId: frame.botId, png: frame.png, mime: frame.mime ?? "image/png" });
-          break;
-        case "computer":
-          rawDispatch({ type: "provisioning", botId: frame.botId, on: frame.state === "provisioning" });
-          break;
-        case "bot.deleted":
-          rawDispatch({ type: "deleteBot", botId: frame.botId });
-          break;
-        // a key changed and the fleet hot-reloaded — refresh the picker so
-        // newly available providers un-dim immediately
-        case "config":
-          rawDispatch({
-            type: "configStatus",
-            config: { xai: frame.xai, composio: frame.composio, box: frame.box, profile: frame.profile },
-          });
-          api("/api/instances")
-            .then(({ instances }) => rawDispatch({ type: "instances", instances }))
-            .catch(() => {});
-          break;
-      }
+        switch (frame.kind) {
+          case "hello":
+            break;
+          case "message":
+            rawDispatch({ type: "messageAdded", threadId: frame.threadId, message: frame.message });
+            break;
+          case "message.patch":
+            rawDispatch({ type: "messagePatched", threadId: frame.threadId, message: frame.message });
+            break;
+          case "bot": {
+            let bot = frame.bot as Partial<Bot> & { id: string };
+            // reading the selected chat clears its badge immediately
+            if (bot.unread && bot.id === stateRef.current.selectedId) {
+              bot = { ...bot, unread: false };
+              api(`/api/bots/${bot.id}`, {
+                method: "PATCH",
+                body: JSON.stringify({ unread: false }),
+              }).catch(() => {});
+            }
+            rawDispatch({ type: "botPatched", bot });
+            break;
+          }
+          case "runtime": {
+            const event = frame.event;
+            if (event.type === "content.delta" && event.streamKind === "assistant_text") {
+              rawDispatch({ type: "streamDelta", threadId: event.threadId, delta: event.delta });
+            } else if (event.type === "turn.completed") {
+              rawDispatch({ type: "streamClear", threadId: event.threadId });
+            }
+            break;
+          }
+          case "screen":
+            rawDispatch({ type: "screenFrame", botId: frame.botId, png: frame.png, mime: frame.mime ?? "image/png" });
+            break;
+          case "computer":
+            rawDispatch({ type: "provisioning", botId: frame.botId, on: frame.state === "provisioning" });
+            break;
+          case "bot.deleted":
+            rawDispatch({ type: "deleteBot", botId: frame.botId });
+            break;
+          // a key changed and the fleet hot-reloaded — refresh the picker so
+          // newly available providers un-dim immediately
+          case "config":
+            rawDispatch({
+              type: "configStatus",
+              config: { xai: frame.xai, composio: frame.composio, box: frame.box, profile: frame.profile },
+            });
+            api("/api/instances")
+              .then(({ instances }) => rawDispatch({ type: "instances", instances }))
+              .catch(() => {});
+            break;
+        }
+      };
     };
+    connect();
+
     return () => {
       alive = false;
-      es.close();
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      es?.close();
     };
   }, []);
 

@@ -73,9 +73,6 @@ export interface BotRecord {
   createdAt: number;
 }
 
-const BOTS_FILE = join(DATA_DIR, "bots.json");
-const messagesFile = (threadId: string) => join(DATA_DIR, `messages-${threadId}.json`);
-
 const COLORS: MausColor[] = [
   "green",
   "blue",
@@ -110,39 +107,92 @@ export function mentionedBots<T extends { name: string; hidden?: boolean }>(text
 }
 
 const onboardingCard = (): OptionCardData => ({
-  title: "What do you mostly want help with?",
-  subtitle: "Pick whatever's closest; we can always expand from there.",
+  title: "What should I be most useful for first?",
+  subtitle: "We can add more later. This just points me at the right kind of help.",
   options: ["Work & projects", "Writing & research", "Life admin", "A bit of everything"],
 });
+
+/** Optional Convex (or other) write-through for SaaS cloud persistence. */
+export interface StoreMirror {
+  upsertBot(bot: BotRecord): Promise<void>;
+  deleteBot(botId: string): Promise<void>;
+  appendMessage(threadId: string, message: Message): Promise<void>;
+  patchMessage(threadId: string, messageId: string, patch: Partial<Message>): Promise<void>;
+}
 
 export class Store {
   bots: BotRecord[] = [];
   private messages = new Map<string, Message[]>();
   private defaultSelection: () => ModelSelection;
+  private rootDir: string;
+  private botsFile: string;
+  private memoryOnly: boolean;
+  private mirror: StoreMirror | null = null;
+  private pending: Promise<void> = Promise.resolve();
 
-  constructor(defaultSelection: () => ModelSelection) {
+  constructor(
+    defaultSelection: () => ModelSelection,
+    rootDir: string = DATA_DIR,
+    opts?: { memoryOnly?: boolean },
+  ) {
     this.defaultSelection = defaultSelection;
-    mkdirSync(DATA_DIR, { recursive: true });
-    try {
-      this.bots = JSON.parse(readFileSync(BOTS_FILE, "utf8"));
-    } catch {
-      this.bots = [];
+    this.rootDir = rootDir;
+    this.botsFile = join(rootDir, "bots.json");
+    this.memoryOnly = opts?.memoryOnly === true;
+    if (!this.memoryOnly) {
+      mkdirSync(rootDir, { recursive: true });
+      try {
+        this.bots = JSON.parse(readFileSync(this.botsFile, "utf8"));
+      } catch {
+        this.bots = [];
+      }
     }
     // busy never survives a restart — no turn does either
     for (const b of this.bots) b.busy = false;
   }
 
+  setMirror(mirror: StoreMirror | null) {
+    this.mirror = mirror;
+  }
+
+  /** Replace in-memory state after a Convex hydrate (SaaS). */
+  replaceState(bots: BotRecord[], messages: Map<string, Message[]>) {
+    this.bots = bots.map((b) => ({ ...b, busy: false }));
+    this.messages = messages;
+  }
+
+  /** Await queued mirror writes (call from HTTP handlers). */
+  async flush(): Promise<void> {
+    await this.pending;
+  }
+
+  private enqueue(op: () => Promise<void>) {
+    this.pending = this.pending.then(op).catch((err) => {
+      console.error("[store mirror]", err);
+    });
+  }
+
+  private messagesFile(threadId: string) {
+    return join(this.rootDir, `messages-${threadId}.json`);
+  }
+
   private saveBots() {
-    writeFileSync(BOTS_FILE, JSON.stringify(this.bots, null, 2));
+    if (!this.memoryOnly) {
+      writeFileSync(this.botsFile, JSON.stringify(this.bots, null, 2));
+    }
   }
 
   messagesFor(threadId: string): Message[] {
     let list = this.messages.get(threadId);
     if (!list) {
-      try {
-        list = JSON.parse(readFileSync(messagesFile(threadId), "utf8"));
-      } catch {
+      if (this.memoryOnly) {
         list = [];
+      } else {
+        try {
+          list = JSON.parse(readFileSync(this.messagesFile(threadId), "utf8"));
+        } catch {
+          list = [];
+        }
       }
       this.messages.set(threadId, list!);
     }
@@ -153,7 +203,10 @@ export class Store {
     const full: Message = { id: newId(), at: Date.now(), ...message };
     const list = this.messagesFor(threadId);
     list.push(full);
-    writeFileSync(messagesFile(threadId), JSON.stringify(list, null, 2));
+    if (!this.memoryOnly) {
+      writeFileSync(this.messagesFile(threadId), JSON.stringify(list, null, 2));
+    }
+    if (this.mirror) this.enqueue(() => this.mirror!.appendMessage(threadId, full));
     return full;
   }
 
@@ -162,7 +215,10 @@ export class Store {
     const idx = list.findIndex((m) => m.id === messageId);
     if (idx === -1) return null;
     list[idx] = { ...list[idx], ...patch, card: patch.card ?? list[idx].card };
-    writeFileSync(messagesFile(threadId), JSON.stringify(list, null, 2));
+    if (!this.memoryOnly) {
+      writeFileSync(this.messagesFile(threadId), JSON.stringify(list, null, 2));
+    }
+    if (this.mirror) this.enqueue(() => this.mirror!.patchMessage(threadId, messageId, patch));
     return list[idx];
   }
 
@@ -186,14 +242,17 @@ export class Store {
       unread: false,
       modelSelection: this.defaultSelection(),
       resumeCursors: {},
+      computer:
+        process.env.OMB_SAAS === "1" || process.env.OMB_SAAS === "true" ? "cloud" : undefined,
       createdAt: Date.now(),
     };
     this.bots.unshift(bot);
     this.saveBots();
+    if (this.mirror) this.enqueue(() => this.mirror!.upsertBot(bot));
     this.appendMessage(bot.threadId, {
       role: "bot",
       kind: "text",
-      text: "Hey — I'm your new bot. Nice to meet you.",
+      text: "Hey — I'm your new bot. Ready when you are.",
     });
     this.appendMessage(bot.threadId, { role: "bot", kind: "options", card: onboardingCard() });
     return bot;
@@ -205,9 +264,12 @@ export class Store {
     this.bots = this.bots.filter((b) => b.id !== id);
     this.messages.delete(bot.threadId);
     this.saveBots();
-    try {
-      unlinkSync(messagesFile(bot.threadId));
-    } catch {}
+    if (!this.memoryOnly) {
+      try {
+        unlinkSync(this.messagesFile(bot.threadId));
+      } catch {}
+    }
+    if (this.mirror) this.enqueue(() => this.mirror!.deleteBot(id));
     return true;
   }
 
@@ -216,6 +278,7 @@ export class Store {
     if (!bot) return null;
     Object.assign(bot, patch);
     this.saveBots();
+    if (this.mirror) this.enqueue(() => this.mirror!.upsertBot(bot));
     return bot;
   }
 
@@ -224,6 +287,7 @@ export class Store {
     if (!bot) return;
     bot.resumeCursors[instanceId] = cursor;
     this.saveBots();
+    if (this.mirror) this.enqueue(() => this.mirror!.upsertBot(bot));
   }
 
   /** First-run seed: one bot so the app never opens empty. */

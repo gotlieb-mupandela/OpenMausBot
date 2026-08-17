@@ -96,8 +96,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const grok = byKind("grokAgent");
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-app">
-      <div className="flex w-[460px] flex-col rounded-2xl border border-hairline/40 bg-panel p-8">
+    <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-app p-0 sm:items-center sm:p-4">
+      <div className="my-auto flex w-full max-w-[460px] flex-col rounded-t-2xl border border-hairline/40 bg-panel p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:rounded-2xl sm:p-8">
         {step === 0 && (
           <div className="flex flex-col items-center">
             <MausAvatar color="green" state="happy" size={72} />

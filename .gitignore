@@ -6,3 +6,7 @@ dist-electron
 *.tsbuildinfo
 electron/resources/speech-helper
 release
+
+.env
+.env.local
+

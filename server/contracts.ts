@@ -97,7 +97,17 @@ export interface SendTurnInput {
   system?: string;
   /** Per-bot integrations the driver may hand to the agent as tools. */
   integrations?: {
-    composio?: { url?: string; key: string };
+    composio?: {
+      url?: string;
+      /** ck_… Connect consumer key (optional when apiKey is set). */
+      key?: string;
+      /** ak_… project API key — Platform list/execute without Connect MCP. */
+      apiKey?: string;
+      /** SaaS tenant for multi-user OAuth isolation */
+      userId?: string;
+      /** Prefer tools for this toolkit slug (e.g. gmail) when listing. */
+      preferToolkit?: string;
+    };
     /** The bot's cloud computer (box.ascii.dev) for desktop/browser use. */
     computer?: { boxId: string; token: string };
     /** Local computer use via the Electron-hosted cua-driver daemon —
@@ -125,6 +135,8 @@ export interface ProviderAdapter {
      * the harness only offers agents tooling (and prompts about it) to
      * drivers that can actually hand it to the agent. */
     agentsMcp?: boolean;
+    /** Driver runs computer/plugin tools in-process (e.g. Ollama tool loop). */
+    toolsInProcess?: boolean;
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;

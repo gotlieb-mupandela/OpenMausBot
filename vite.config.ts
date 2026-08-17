@@ -20,6 +20,13 @@ export default defineConfig({
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
+  // Keep PostCSS local. Without this, Vite walks up and loads
+  // ~/postcss.config.js (Tailwind v3), which breaks @import "tailwindcss".
+  css: {
+    postcss: {
+      plugins: [],
+    },
+  },
   server: {
     // IPv4 explicitly — a bare ::1 bind makes localhost a coin-flip for
     // clients that resolve IPv4 first
@@ -33,8 +40,24 @@ export default defineConfig({
     // the harness server owns every provider process; the app only ever
     // talks to /api — clients hold no transports
     proxy: {
+      // SSE must not be buffered; longer timeouts keep EventSource alive.
+      "/api/events": {
+        target: `http://127.0.0.1:${process.env.OGB_PORT || 8799}`,
+        changeOrigin: true,
+        timeout: 0,
+        proxyTimeout: 0,
+        configure: (proxy) => {
+          proxy.on("proxyRes", (proxyRes) => {
+            proxyRes.headers["cache-control"] = "no-cache, no-transform";
+            proxyRes.headers["x-accel-buffering"] = "no";
+            // Prevent http-proxy from buffering the whole stream.
+            delete proxyRes.headers["content-length"];
+          });
+        },
+      },
       "/api": {
         target: `http://127.0.0.1:${process.env.OGB_PORT || 8799}`,
+        changeOrigin: true,
       },
     },
   },

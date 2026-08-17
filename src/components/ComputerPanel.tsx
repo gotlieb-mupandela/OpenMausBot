@@ -18,9 +18,14 @@ import {
 import { useStore, type Bot } from "@/state/store";
 import { ApiKeyRow } from "./ApiKeys";
 import { cn } from "@/lib/cn";
+import { PANEL_SHELL } from "@/lib/panel-shell";
 
 async function api(path: string, init?: RequestInit): Promise<any> {
-  const res = await fetch(path, { headers: { "content-type": "application/json" }, ...init });
+  const res = await fetch(path, {
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    ...init,
+  });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error ?? `${res.status} ${res.statusText}`);
   return body;
@@ -36,10 +41,11 @@ type Phase =
   | "off"
   | "error";
 
-export function ComputerPanel({ bot }: { bot: Bot }) {
+export function ComputerPanel({ bot, saasMode = false }: { bot: Bot; saasMode?: boolean }) {
   const { state, dispatch } = useStore();
   const [phase, setPhase] = useState<Phase>("checking");
   const [boxState, setBoxState] = useState<string | null>(null);
+  const [shared, setShared] = useState(false);
   const [polledFrame, setPolledFrame] = useState<{ png: string; mime: string } | null>(null);
   const [localFrame, setLocalFrame] = useState<string | null>(null);
   const [pending, setPending] = useState<"join" | "sleep" | null>(null);
@@ -68,7 +74,8 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     api(`/api/bots/${bot.id}/computer`)
       .then((status) => {
         if (!alive) return;
-        const autoLocal = bot.computer !== "cloud" && isElectron;
+        setShared(Boolean(status.shared));
+        const autoLocal = !saasMode && bot.computer !== "cloud" && isElectron;
         if (!status.configured) {
           setPhase(autoLocal ? "local" : "unconfigured");
           return;
@@ -81,6 +88,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         return api(`/api/bots/${bot.id}/computer/provision`, { method: "POST" }).then((r) => {
           if (!alive) return;
           setBoxState(r.state ?? null);
+          setShared(Boolean(r.shared) || Boolean(status.shared));
           setPhase("ready");
         });
       })
@@ -92,7 +100,7 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
     return () => {
       alive = false;
     };
-  }, [bot.id, bot.computer, retry]);
+  }, [bot.id, bot.computer, retry, saasMode]);
 
   // cloud preview: SSE frames win while the bot works; otherwise poll
   const live = state.screens[bot.id];
@@ -174,17 +182,19 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
 
   const emptyState: Record<Exclude<Phase, "ready" | "local">, string> = {
     checking: "Checking…",
-    starting: "Starting your bot's computer…",
-    unconfigured: "No cloud computer configured",
+    starting: shared || saasMode ? "Starting your team's computer…" : "Starting your bot's computer…",
+    unconfigured: saasMode
+      ? "Cloud computer isn't available yet — the host needs BOX_TOKEN"
+      : "No cloud computer configured",
     "local-unavailable": "Local preview needs the desktop app — run pnpm dev:desktop",
     off: "This bot's computer is off",
     error: "Couldn't reach the computer",
   };
 
   return (
-    <aside className="animate-panel-in flex h-full w-[400px] shrink-0 flex-col border-l border-hairline/40 bg-panel">
+    <aside className={PANEL_SHELL}>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3">
+      <div className="flex items-center justify-between px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <button
           onClick={() => dispatch({ type: "toggleSettings", open: true })}
           className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
@@ -201,11 +211,14 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-5 pb-5">
+      <div className="flex-1 overflow-y-auto px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-5 sm:pb-5">
         {/* Screen preview */}
         <div className="mb-1.5 mt-2 flex items-center justify-between text-[13px] text-ink-secondary">
-          <span>{bot.name}'s screen</span>
+          <span>{shared || saasMode ? "Team computer" : `${bot.name}'s screen`}</span>
           {phase === "local" && <span className="text-[11px]">this Mac</span>}
+          {(shared || saasMode) && phase === "ready" && (
+            <span className="text-[11px]">shared by all bots</span>
+          )}
         </div>
         <div className="flex aspect-[16/10] w-full items-center justify-center overflow-hidden rounded-xl bg-card">
           {frameSrc ? (
@@ -242,10 +255,33 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
 
         {error && (
           <div className="mt-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger">
-            {error}
+            {(() => {
+              const billingMatch = error.match(/https:\/\/box\.ascii\.dev[^\s]*/);
+              if (!billingMatch) return error;
+              const url = billingMatch[0];
+              const before = error.slice(0, billingMatch.index).trim();
+              return (
+                <span>
+                  {before || "Box billing is required to start the computer."}{" "}
+                  <a href={url} target="_blank" rel="noreferrer" className="underline hover:text-ink">
+                    Open Box billing
+                  </a>
+                </span>
+              );
+            })()}
           </div>
         )}
-        {phase === "unconfigured" && (
+        {phase === "error" && /billing|402|subscription/i.test(error ?? "") && (
+          <a
+            href="https://box.ascii.dev/box/dashboard?tab=billing&box_api_url=https%3A%2F%2Fascii.dev"
+            target="_blank"
+            rel="noreferrer"
+            className="mt-3 flex w-full items-center justify-center rounded-xl bg-accent py-2.5 text-[13px] font-medium text-white hover:brightness-110"
+          >
+            Start Box plan ($20/mo)
+          </a>
+        )}
+        {phase === "unconfigured" && !saasMode && (
           <div className="mt-3 rounded-xl bg-card p-4">
             <div className="mb-3 text-[13px] text-ink-secondary">
               Paste a Box token from box.ascii.dev to give this bot a cloud computer — it spins up right here.
@@ -256,6 +292,12 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
               placeholder="Token from box.ascii.dev"
               onSaved={(configured) => configured && setRetry((n) => n + 1)}
             />
+          </div>
+        )}
+        {phase === "unconfigured" && saasMode && (
+          <div className="mt-3 rounded-xl bg-card p-4 text-[13px] text-ink-secondary">
+            Your host needs a platform <code className="rounded bg-raised px-1">BOX_TOKEN</code> so every
+            teammate can share one cloud computer.
           </div>
         )}
 
@@ -288,9 +330,14 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
         <div className="mt-4 rounded-xl bg-card p-4">
           <div className="text-[15px] font-medium text-ink">Runs on</div>
           <div className="mt-0.5 text-[13px] text-ink-secondary">
-            {bot.computer ? "" : "Auto: the cloud box when one exists, else this Mac. "}Pick where this bot's
-            computer lives.
+            {saasMode
+              ? "All bots share one cloud computer (files and browser sessions included)."
+              : bot.computer
+                ? ""
+                : "Auto: the cloud box when one exists, else this Mac. "}
+            {!saasMode && "Pick where this bot's computer lives."}
           </div>
+          {!saasMode && (
           <div className="mt-3 flex overflow-hidden rounded-lg border border-hairline/40">
             {(
               [
@@ -303,35 +350,41 @@ export function ComputerPanel({ bot }: { bot: Bot }) {
                 key={mode}
                 onClick={() => dispatch({ type: "updateBot", botId: bot.id, patch: { computer: mode } })}
                 className={cn(
-                  "flex-1 py-1.5 text-[13px]",
+                  "flex-1 px-1 py-2 text-[12px] sm:py-1.5 sm:text-[13px]",
                   i > 0 && "border-l border-hairline/40",
                   bot.computer === mode
                     ? "bg-raised text-ink"
                     : "text-ink-secondary hover:bg-raised/60 hover:text-ink",
                 )}
               >
-                {label}
+                <span className="sm:hidden">{mode === "cloud" ? "Cloud" : mode === "local" ? "Local" : "Off"}</span>
+                <span className="hidden sm:inline">{label}</span>
               </button>
             ))}
           </div>
+          )}
         </div>
 
-        {/* Routines */}
-        <div className="mt-4 rounded-xl bg-card p-4">
+        {/* Routines — UI parity with Grok; scheduling lands in a later phase */}
+        <div className="mt-4 rounded-xl border border-hairline/40 bg-card p-4">
           <div className="flex items-center gap-2 text-[15px] font-medium text-ink">
             <CalendarClock size={16} className="text-ink-secondary" />
             Routines
           </div>
-          <div className="mt-0.5 text-[13px] text-ink-secondary">
+          <div className="mt-1 text-[13px] leading-snug text-ink-secondary">
             Routines are recurring tasks this agent runs on a schedule.
           </div>
           <button
+            type="button"
             disabled
-            className="mt-3 w-full cursor-not-allowed rounded-lg bg-raised py-2 text-[13px] text-ink-secondary opacity-60"
+            className="mt-4 w-full cursor-not-allowed rounded-xl border border-hairline/60 bg-transparent py-2.5 text-[14px] font-medium text-ink-secondary"
             title="Coming soon"
           >
             Create Routine
           </button>
+          <div className="mt-3 rounded-lg bg-inset px-3 py-2.5 text-[12px] text-ink-secondary">
+            Coming soon — you&apos;ll name a routine, write the instruction, and add triggers here.
+          </div>
         </div>
       </div>
     </aside>

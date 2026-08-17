@@ -1,0 +1,94 @@
+import { v } from "convex/values";
+import { mutation, query } from "./_generated/server.js";
+
+/** Shared secret between the Node harness and Convex mutations/queries. */
+function assertHarness(secret: string) {
+  const expected = process.env.OMB_HARNESS_SECRET;
+  if (!expected || secret !== expected) {
+    throw new Error("Unauthorized harness call");
+  }
+}
+
+export const findByEmail = query({
+  args: { secret: v.string(), email: v.string() },
+  handler: async (ctx, args) => {
+    assertHarness(args.secret);
+    return await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", args.email.trim().toLowerCase()))
+      .unique();
+  },
+});
+
+export const findById = query({
+  args: { secret: v.string(), userId: v.id("users") },
+  handler: async (ctx, args) => {
+    assertHarness(args.secret);
+    return await ctx.db.get(args.userId);
+  },
+});
+
+export const create = mutation({
+  args: {
+    secret: v.string(),
+    email: v.string(),
+    name: v.string(),
+    passwordHash: v.string(),
+    createdAt: v.number(),
+    subscriptionStatus: v.union(
+      v.literal("trialing"),
+      v.literal("active"),
+      v.literal("past_due"),
+      v.literal("canceled"),
+      v.literal("none"),
+    ),
+    subscriptionEndsAt: v.union(v.number(), v.null()),
+  },
+  handler: async (ctx, args) => {
+    assertHarness(args.secret);
+    const email = args.email.trim().toLowerCase();
+    const existing = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", email))
+      .unique();
+    if (existing) throw new Error("email already registered");
+    return await ctx.db.insert("users", {
+      email,
+      name: args.name,
+      passwordHash: args.passwordHash,
+      createdAt: args.createdAt,
+      subscriptionStatus: args.subscriptionStatus,
+      subscriptionEndsAt: args.subscriptionEndsAt,
+    });
+  },
+});
+
+export const patchSubscription = mutation({
+  args: {
+    secret: v.string(),
+    userId: v.id("users"),
+    subscriptionStatus: v.optional(
+      v.union(
+        v.literal("trialing"),
+        v.literal("active"),
+        v.literal("past_due"),
+        v.literal("canceled"),
+        v.literal("none"),
+      ),
+    ),
+    subscriptionEndsAt: v.optional(v.union(v.number(), v.null())),
+    stripeCustomerId: v.optional(v.string()),
+    stripeSubscriptionId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    assertHarness(args.secret);
+    const user = await ctx.db.get(args.userId);
+    if (!user) return null;
+    const { secret: _, userId: __, ...patch } = args;
+    const clean = Object.fromEntries(
+      Object.entries(patch).filter(([, val]) => val !== undefined),
+    );
+    await ctx.db.patch(args.userId, clean);
+    return await ctx.db.get(args.userId);
+  },
+});

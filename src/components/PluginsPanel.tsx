@@ -2,7 +2,7 @@
 // from /api/connectors/catalog — the full toolkit list with logos when a
 // Composio API key is configured, a curated set otherwise. Icons resolve
 // logo → favicon → monogram.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, RefreshCw, X } from "lucide-react";
 import { api, useStore } from "@/state/store";
 import { cn } from "@/lib/cn";
@@ -48,15 +48,36 @@ export function PluginsPanel() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [tab, setTab] = useState<"marketplace" | "yours">("marketplace");
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  const cardsRef = useRef(cards);
+  cardsRef.current = cards;
 
   const refreshStatus = useCallback((slugs: string[]) => {
     if (!slugs.length) return Promise.resolve();
     setRefreshing(true);
-    return api(`/api/connectors?services=${slugs.join(",")}`)
-      .then((r) => setStatus(r.services ?? {}))
-      .catch(() => {})
+    return api(`/api/connectors?services=${encodeURIComponent(slugs.join(","))}`)
+      .then((r) => {
+        setError(null);
+        setStatus((prev) => ({ ...prev, ...(r.services ?? {}) }));
+        if (r.configured === false) setConfigured(false);
+        else if (r.configured === true) setConfigured(true);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setRefreshing(false));
   }, []);
+
+  const refreshVisible = useCallback(() => {
+    const list = cardsRef.current ?? [];
+    const slugs = list.map((c) => c.slug).slice(0, 80);
+    // Always include common apps so a just-connected Gmail isn't missed
+    // when the catalog page is truncated.
+    for (const extra of ["gmail", "github", "notion", "slack", "googlecalendar"]) {
+      if (!slugs.includes(extra)) slugs.push(extra);
+    }
+    return refreshStatus(slugs);
+  }, [refreshStatus]);
 
   useEffect(() => {
     let alive = true;
@@ -66,7 +87,13 @@ export function PluginsPanel() {
         setCards(r.cards ?? []);
         setSource(r.source ?? "curated");
         setConfigured(Boolean(r.configured));
-        if (r.configured) void refreshStatus((r.cards ?? []).map((c: ToolkitCard) => c.slug).slice(0, 40));
+        if (r.configured) {
+          const slugs = (r.cards ?? []).map((c: ToolkitCard) => c.slug).slice(0, 80);
+          for (const extra of ["gmail", "github", "notion", "slack", "googlecalendar"]) {
+            if (!slugs.includes(extra)) slugs.push(extra);
+          }
+          void refreshStatus(slugs);
+        }
       })
       .catch((e) => alive && setError(e.message));
     return () => {
@@ -74,17 +101,40 @@ export function PluginsPanel() {
     };
   }, [refreshStatus]);
 
+  useEffect(() => {
+    const onFocus = () => {
+      if (configured) void refreshVisible();
+    };
+    const onVis = () => {
+      if (document.visibilityState === "visible") onFocus();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVis);
+    const poll = configured
+      ? setInterval(() => {
+          void refreshVisible();
+        }, 20_000)
+      : null;
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVis);
+      if (poll) clearInterval(poll);
+    };
+  }, [configured, refreshVisible]);
+
   const connect = (slug: string) => {
     setBusySlug(slug);
     setError(null);
     api(`/api/connectors/${slug}/authorize`, { method: "POST" })
       .then(({ url }) => {
         window.open(url);
-        // the user finishes OAuth in the browser; poll a few times to catch it
         let tries = 0;
         const timer = setInterval(() => {
-          void refreshStatus([slug]);
-          if (++tries >= 6 || status[slug]?.connected) clearInterval(timer);
+          tries += 1;
+          void refreshStatus([slug]).then(() => {
+            if (statusRef.current[slug]?.connected) clearInterval(timer);
+          });
+          if (tries >= 24) clearInterval(timer); // ~2 min
         }, 5000);
       })
       .catch((e) => setError(e.message))
@@ -99,24 +149,40 @@ export function PluginsPanel() {
       .finally(() => setBusySlug(null));
   };
 
-  const visible = (cards ?? []).filter(
+  const yours = (() => {
+    const list = cards ?? [];
+    const fromCatalog = list.filter((c) => status[c.slug]?.connected);
+    const seen = new Set(fromCatalog.map((c) => c.slug));
+    // Connected apps may sit outside the first catalog page — still list them in Yours.
+    const extras: ToolkitCard[] = Object.entries(status)
+      .filter(([slug, s]) => s.connected && !seen.has(slug))
+      .map(([slug]) => ({
+        slug,
+        label: slug.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+        blurb: "Connected",
+        logo: null,
+        domain: slug === "gmail" ? "gmail.com" : null,
+      }));
+    return [...fromCatalog, ...extras];
+  })();
+  const visible = (tab === "yours" ? yours : cards ?? []).filter(
     (c) => !search || `${c.label} ${c.slug} ${c.blurb}`.toLowerCase().includes(search.toLowerCase()),
   );
 
   return (
     <div
-      className="absolute inset-0 z-20 flex items-center justify-center bg-black/40"
+      className="absolute inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4"
       onClick={() => dispatch({ type: "togglePlugins", open: false })}
     >
       <div
-        className="animate-pop-in flex max-h-[80%] w-[560px] flex-col rounded-2xl border border-hairline/50 bg-panel p-5 shadow-2xl"
+        className="animate-pop-in flex max-h-[min(92dvh,920px)] w-full flex-col rounded-t-2xl border border-hairline/50 bg-panel p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-2xl sm:max-h-[80%] sm:w-[min(640px,100%)] sm:rounded-2xl sm:p-5"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between">
-          <div className="text-[17px] font-semibold text-ink">Connected apps</div>
+        <div className="flex items-center justify-between pt-[env(safe-area-inset-top)] sm:pt-0">
+          <div className="text-[17px] font-semibold text-ink">Plugins</div>
           <div className="flex items-center gap-1">
             <button
-              onClick={() => refreshStatus(visible.map((c) => c.slug).slice(0, 40))}
+              onClick={() => void refreshVisible()}
               className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
               title="Refresh connection status"
             >
@@ -130,13 +196,40 @@ export function PluginsPanel() {
             </button>
           </div>
         </div>
-        <div className="mt-1 text-[13px] text-ink-secondary">
-          Apps your bots can use through Composio Connect.
+
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="flex rounded-lg border border-hairline/40 p-0.5">
+            {(["marketplace", "yours"] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={cn(
+                  "rounded-md px-3 py-1.5 text-[13px] capitalize",
+                  tab === t ? "bg-raised text-ink" : "text-ink-secondary hover:text-ink",
+                )}
+              >
+                {t === "marketplace" ? "Marketplace" : "Yours"}
+                {t === "yours" && yours.length > 0 ? ` · ${yours.length}` : ""}
+              </button>
+            ))}
+          </div>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search plugins"
+            className="min-w-0 flex-1 rounded-lg border border-hairline/40 bg-inset px-3 py-1.5 text-[13px] text-ink placeholder:text-ink-secondary focus:outline-none"
+          />
+        </div>
+
+        <div className="mt-2 text-[12px] text-ink-secondary">
+          {source === "api" ? "Full catalog" : "Curated apps"} · connections stay on your account
         </div>
 
         {!configured && (
           <div className="mt-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[13px] text-warning">
-            No Composio Connect key yet —{" "}
+            Paste a Composio project API key (
+            <code className="rounded bg-raised/60 px-1">ak_…</code>) in App Settings to Add apps — from
+            Platform → project → Settings → API Keys.{" "}
             <button
               className="underline"
               onClick={() => {
@@ -144,84 +237,60 @@ export function PluginsPanel() {
                 dispatch({ type: "toggleAppSettings", open: true });
               }}
             >
-              add one in App Settings
-            </button>{" "}
-            to connect apps.
+              Open App Settings
+            </button>
+            . Saving applies immediately — no restart.
           </div>
         )}
-        {configured && source === "curated" && (
-          <div className="mt-3 text-[12px] text-ink-secondary">
-            Showing a curated set.{" "}
-            <button
-              className="underline hover:text-ink"
-              onClick={() => {
-                dispatch({ type: "togglePlugins", open: false });
-                dispatch({ type: "toggleAppSettings", open: true });
-              }}
-            >
-              Add a Composio API key
-            </button>{" "}
-            to browse the full catalog.
-          </div>
-        )}
-        {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
 
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search apps"
-          className="mt-3 w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
-        />
+        {error && <div className="mt-2 text-[13px] text-danger">{error}</div>}
 
-        <div className="mt-3 min-h-0 flex-1 overflow-y-auto rounded-xl border border-hairline/40">
+        <div className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto">
           {cards === null ? (
-            <div className="flex items-center justify-center gap-2 py-8 text-[13px] text-ink-secondary">
-              <Loader2 size={14} className="animate-spin" /> Loading catalog…
+            <div className="flex justify-center py-10">
+              <Loader2 size={18} className="animate-spin text-ink-secondary" />
+            </div>
+          ) : visible.length === 0 ? (
+            <div className="py-8 text-center text-[13px] text-ink-secondary">
+              {tab === "yours" ? "No connected apps yet — add some from Marketplace." : "No apps match."}
             </div>
           ) : (
-            visible.map((card, i) => {
-              const connected = status[card.slug]?.connected;
-              const busy = busySlug === card.slug;
-              return (
-                <div
-                  key={card.slug}
-                  className={cn(
-                    "flex items-center gap-3 bg-card px-4 py-3",
-                    i > 0 && "border-t border-hairline/40",
-                  )}
-                >
-                  <ServiceIcon card={card} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 text-[14px] font-medium text-ink">
-                      {card.label}
-                      {connected && <span className="size-1.5 rounded-full bg-success" />}
-                    </div>
-                    <div className="truncate text-[12px] text-ink-secondary">{card.blurb}</div>
-                  </div>
-                  <button
-                    disabled={!configured || busy}
-                    onClick={() => (connected ? disconnect(card.slug) : connect(card.slug))}
-                    className={cn(
-                      "w-[92px] rounded-lg py-1.5 text-[13px] disabled:opacity-50",
-                      connected
-                        ? "bg-raised text-ink-secondary hover:text-danger"
-                        : "bg-raised text-ink hover:bg-raised-hover",
-                    )}
+            <div className="grid gap-2 sm:grid-cols-2">
+              {visible.map((card) => {
+                const connected = Boolean(status[card.slug]?.connected);
+                const busy = busySlug === card.slug;
+                return (
+                  <div
+                    key={card.slug}
+                    className="flex items-center gap-3 rounded-xl border border-hairline/40 bg-card px-3 py-3"
                   >
-                    {busy ? (
-                      <Loader2 size={13} className="mx-auto animate-spin" />
-                    ) : connected ? (
-                      "Disconnect"
-                    ) : (
-                      "Connect"
-                    )}
-                  </button>
-                </div>
-              );
-            })
-          )}
-          {cards !== null && visible.length === 0 && (
-            <div className="py-8 text-center text-[13px] text-ink-secondary">No apps match.</div>
+                    <ServiceIcon card={card} />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[14px] font-medium text-ink">{card.label}</div>
+                      <div className="line-clamp-2 text-[12px] text-ink-secondary">{card.blurb}</div>
+                    </div>
+                    <button
+                      disabled={!configured || busy}
+                      onClick={() => (connected ? disconnect(card.slug) : connect(card.slug))}
+                      className={cn(
+                        "w-[72px] shrink-0 rounded-lg py-1.5 text-[13px] disabled:opacity-50",
+                        connected
+                          ? "bg-raised text-ink-secondary hover:text-danger"
+                          : "bg-raised text-ink hover:bg-raised-hover",
+                      )}
+                    >
+                      {busy ? (
+                        <Loader2 size={13} className="mx-auto animate-spin" />
+                      ) : connected ? (
+                        "Remove"
+                      ) : (
+                        "Add"
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
       </div>

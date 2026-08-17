@@ -9,6 +9,7 @@ import {
 } from "@/lib/mascot";
 import { ModelPicker } from "./ModelPicker";
 import { cn } from "@/lib/cn";
+import { PANEL_SHELL } from "@/lib/panel-shell";
 
 function Field({
   label,
@@ -39,9 +40,9 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
 
   return (
-    <aside className="animate-panel-in flex h-full w-[400px] shrink-0 flex-col border-l border-hairline/40 bg-panel">
+    <aside className={PANEL_SHELL}>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3">
+      <div className="flex items-center justify-between px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <button
           onClick={() => dispatch({ type: "toggleSettings", open: false })}
           className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
@@ -57,7 +58,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-5 pb-5">
+      <div className="flex-1 overflow-y-auto px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-5 sm:pb-5">
         <div className="flex justify-center py-5">
           <MausAvatar
             color={bot.color}
@@ -86,7 +87,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
               <div className="mb-2 text-[12px] font-medium uppercase tracking-[0.08em] text-ink-secondary">
                 Expression
               </div>
-              <div className="grid grid-cols-5 gap-2">
+              <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
                 {PICKABLE_STATES.map((expression) => (
                   <button
                     key={expression}
@@ -148,14 +149,14 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
             />
           </Field>
 
-          <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-4">
-            <div>
+          <div className="flex flex-col gap-3 rounded-xl bg-card p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+            <div className="min-w-0">
               <div className="text-[15px] font-medium text-ink">Model</div>
               <div className="mt-0.5 text-[13px] text-ink-secondary">
                 Which provider and model this bot runs on
               </div>
             </div>
-            <ModelPicker bot={bot} />
+            <ModelPicker bot={bot} className="self-start sm:self-auto" />
           </div>
 
           <div className="rounded-xl bg-card p-4">

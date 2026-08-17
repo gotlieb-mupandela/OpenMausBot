@@ -1,5 +1,4 @@
-import { track } from "@/lib/analytics";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   BellDot,
   ClipboardCopy,
@@ -11,14 +10,15 @@ import {
   PinOff,
   Plus,
   Search,
-  Settings,
   Puzzle,
   Trash2,
+  ArrowUp,
 } from "lucide-react";
 import { useStore, formatTime, type Bot } from "@/state/store";
 import { MausAvatar, InitialsAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
 import { cn } from "@/lib/cn";
+import { useMobileNav } from "@/lib/mobile-nav";
 
 const isElectron = navigator.userAgent.includes("Electron");
 
@@ -54,6 +54,7 @@ interface MenuState {
 
 function BotContextMenu({ menu, onClose }: { menu: MenuState; onClose: () => void }) {
   const { state, dispatch } = useStore();
+  const { closeList } = useMobileNav();
   const bot = state.bots.find((b) => b.id === menu.botId);
 
   useEffect(() => {
@@ -124,6 +125,7 @@ function BotContextMenu({ menu, onClose }: { menu: MenuState; onClose: () => voi
         divider("d1"),
         item(<Pencil size={16} className="text-ink-secondary" />, "Edit Profile", () => {
           dispatch({ type: "select", id: bot.id });
+          closeList();
           dispatch({ type: "toggleSettings", open: true });
         }),
         item(<Copy size={16} className="text-ink-secondary" />, "Duplicate", () =>
@@ -147,12 +149,16 @@ function BotContextMenu({ menu, onClose }: { menu: MenuState; onClose: () => voi
 
 function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => void }) {
   const { state, dispatch } = useStore();
+  const { closeList } = useMobileNav();
   const selected = state.selectedId === bot.id;
   const mascotMotion = selected && state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
   const last = bot.messages[bot.messages.length - 1];
   return (
     <button
-      onClick={() => dispatch({ type: "select", id: bot.id })}
+      onClick={() => {
+        dispatch({ type: "select", id: bot.id });
+        closeList();
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
         onMenu({ botId: bot.id, x: e.clientX, y: e.clientY });
@@ -185,7 +191,7 @@ function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => v
           <span className="truncate text-[13px] text-ink-secondary">
             {preview(bot)}
           </span>
-          {bot.unread && (
+          {bot.unread && !selected && (
             <span className="size-2 shrink-0 rounded-full bg-accent" />
           )}
         </div>
@@ -196,30 +202,53 @@ function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => v
 
 export function Sidebar() {
   const { state, dispatch } = useStore();
+  const { listOpen, closeList } = useMobileNav();
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [query, setQuery] = useState("");
 
-  const visibleBots = state.bots
-    .filter((b) => !b.hidden)
-    .sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false));
+  const visibleBots = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return state.bots
+      .filter((b) => !b.hidden)
+      .filter((b) => {
+        if (!q) return true;
+        const hay = `${b.name} ${b.title} ${b.description} ${preview(b)}`.toLowerCase();
+        return hay.includes(q);
+      })
+      .sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false));
+  }, [state.bots, query]);
+  const showMobileList = listOpen || state.bots.filter((b) => !b.hidden).length === 0;
 
   return (
-    <aside className="flex h-full w-[320px] shrink-0 flex-col border-r border-hairline/40 bg-panel">
+    <aside
+      className={cn(
+        "flex h-full shrink-0 flex-col border-r border-hairline/40 bg-panel",
+        "max-md:absolute max-md:inset-0 max-md:z-30 max-md:w-full max-md:border-r-0",
+        "md:relative md:w-[320px]",
+        showMobileList ? "max-md:flex" : "max-md:hidden",
+      )}
+    >
       {/* Titlebar: real traffic lights in Electron, faux ones in the browser */}
       <div
-        className="flex items-center justify-between px-4 pt-3.5 pb-1"
+        className="flex items-center justify-between px-4 pt-[max(0.875rem,env(safe-area-inset-top))] pb-1"
         style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
       >
         {isElectron ? (
-          <div className="w-14" />
+          <div className="hidden w-14 md:block" />
         ) : (
-          <div className="flex items-center gap-2">
+          <div className="hidden items-center gap-2 md:flex">
             <span className="size-3 rounded-full bg-[#ff5f57]" />
             <span className="size-3 rounded-full bg-[#febc2e]" />
             <span className="size-3 rounded-full bg-[#28c840]" />
           </div>
         )}
+        <div className="text-[15px] font-semibold text-ink md:hidden">Chats</div>
+        <div className="hidden flex-1 md:block" />
         <button
-          onClick={() => { track("bot_created"); dispatch({ type: "newBot" }); }}
+          onClick={() => {
+            dispatch({ type: "toggleNewBotWizard", open: true });
+            closeList();
+          }}
           className="rounded-md p-1 text-ink-secondary hover:bg-raised hover:text-ink"
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
           title="New bot"
@@ -230,9 +259,11 @@ export function Sidebar() {
 
       {/* Search */}
       <div className="px-3 pt-2 pb-3">
-        <div className="flex items-center gap-2 rounded-lg bg-raised/70 px-3 py-2">
+        <div className="flex items-center gap-2 rounded-full bg-raised/70 px-3 py-2">
           <Search size={16} className="text-ink-secondary" />
           <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
             placeholder="Search"
             className="w-full bg-transparent text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
           />
@@ -242,14 +273,18 @@ export function Sidebar() {
       {/* Bot list */}
       <div className="flex-1 overflow-y-auto px-2">
         <div className="flex flex-col gap-0.5">
-          {visibleBots.map((b) => (
-            <BotListItem key={b.id} bot={b} onMenu={setMenu} />
-          ))}
+          {visibleBots.length === 0 ? (
+            <div className="px-3 py-8 text-center text-[13px] text-ink-secondary">
+              {query.trim() ? "No chats match" : "No chats yet"}
+            </div>
+          ) : (
+            visibleBots.map((b) => <BotListItem key={b.id} bot={b} onMenu={setMenu} />)
+          )}
         </div>
       </div>
 
       {/* Footer */}
-      <div className="px-3 pb-3 pt-2">
+      <div className="space-y-0.5 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2">
         <button
           onClick={() => dispatch({ type: "togglePlugins", open: true })}
           className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-raised/50"
@@ -257,7 +292,7 @@ export function Sidebar() {
           <Puzzle size={20} className="text-ink-secondary" />
           <span className="text-[14px] text-ink">Plugins</span>
         </button>
-        <div className="flex items-center">
+        <div className="flex items-center gap-1">
           <button
             onClick={() => dispatch({ type: "toggleAppSettings" })}
             className="flex min-w-0 flex-1 items-center gap-3 rounded-xl px-3 py-2 text-left hover:bg-raised/50"
@@ -268,11 +303,11 @@ export function Sidebar() {
             </span>
           </button>
           <button
-            onClick={() => dispatch({ type: "toggleAppSettings" })}
-            className="rounded-md p-2 text-ink-secondary hover:bg-raised hover:text-ink"
-            title="App settings"
+            onClick={() => dispatch({ type: "toggleNewBotWizard", open: true })}
+            className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent text-white hover:brightness-110"
+            title="New bot"
           >
-            <Settings size={18} />
+            <ArrowUp size={18} strokeWidth={2.5} />
           </button>
         </div>
       </div>

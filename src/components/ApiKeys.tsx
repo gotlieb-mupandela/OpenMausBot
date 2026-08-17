@@ -6,12 +6,13 @@ import { Check, Loader2 } from "lucide-react";
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { cn } from "@/lib/cn";
 
-export type ConfigSection = "composio" | "composioApi" | "box";
+export type ConfigSection = "composio" | "composioApi" | "box" | "ollama";
 
 const SECTIONS: Record<
   ConfigSection,
   { body: (value: string) => unknown; flag: (config: ConfigStatus) => boolean }
 > = {
+  ollama: { body: (v) => ({ ollama: { key: v } }), flag: (c) => c.ollama?.configured ?? false },
   composio: { body: (v) => ({ composio: { key: v } }), flag: (c) => c.composio.configured },
   composioApi: {
     body: (v) => ({ composio: { apiKey: v } }),
@@ -42,11 +43,32 @@ export function ApiKeyRow({
 
   const save = () => {
     if (saving || (!value.trim() && !configured)) return;
+    const trimmed = value.trim();
+    if (trimmed) {
+      if (section === "composio" && trimmed.startsWith("ak_")) {
+        setError(
+          "That’s a project API key (ak_…). Use the Composio API key field below — Add apps works with ak_ alone.",
+        );
+        return;
+      }
+      if (section === "composio" && !trimmed.startsWith("ck_")) {
+        setError("Connect key should start with ck_… (dashboard → Install / AI Clients).");
+        return;
+      }
+      if (section === "composioApi" && trimmed.startsWith("ck_")) {
+        setError("That’s a Connect key (ck_…). Paste it in the Composio Connect key field above.");
+        return;
+      }
+      if (section === "composioApi" && !trimmed.startsWith("ak_")) {
+        setError("API key should start with ak_… (Platform → project → Settings → API Keys).");
+        return;
+      }
+    }
     setSaving(true);
     setError(null);
     api("/api/config", {
       method: "PUT",
-      body: JSON.stringify(SECTIONS[section].body(value.trim())),
+      body: JSON.stringify(SECTIONS[section].body(trimmed)),
     })
       .then((status: ConfigStatus) => {
         dispatch({ type: "configStatus", config: status });

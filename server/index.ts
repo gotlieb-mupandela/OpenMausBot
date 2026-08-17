@@ -16,7 +16,10 @@ import type { RuntimeEvent } from "./contracts.ts";
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
-import { mentionedBots, Store, type Message } from "./store.ts";
+import { mentionedBots, type Message } from "./store.ts";
+import { SAAS_MODE, SAAS_HOST, SAAS_PLAN } from "./saas/mode.ts";
+import * as auth from "./saas/auth.ts";
+import { TenantStores } from "./saas/tenants.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -47,6 +50,8 @@ const COMMS_TOKEN = randomBytes(24).toString("hex");
 // a peer invoked via ask_bot runs at depth 1 and gets NO agents tool, so
 // A→B is allowed but B→C (and A→B→A loops) never start.
 const MAX_COMMS_DEPTH = 1;
+/** Cancel in-flight startTurn prep (labels / box) when the user hits Stop. */
+const turnDispatchAborts = new Map<string, AbortController>();
 // proxy entry: .ts in dev (node type-strips), .js in the packaged dist-server
 const agentsProxyPath = (() => {
   const ts = join(dirname(fileURLToPath(import.meta.url)), "drivers", "agents-proxy.ts");
@@ -73,8 +78,9 @@ function agentsIntegration(botId: string, depth: number) {
  * synchronous half of ask_bot. Subscribes to the bus, folds assistant_text
  * for that thread, resolves on turn.completed (or a 4-min ceiling). */
 function askBotAndWait(targetBotId: string, message: string, depth: number): Promise<string> {
-  const target = store.bot(targetBotId);
-  if (!target) return Promise.resolve("(no such bot)");
+  const store = storeForBot(targetBotId);
+  const target = store?.bot(targetBotId);
+  if (!target || !store) return Promise.resolve("(no such bot)");
   const threadId = target.threadId;
   return new Promise((resolve) => {
     let text = "";
@@ -101,27 +107,52 @@ function askBotAndWait(targetBotId: string, message: string, depth: number): Pro
   });
 }
 
-// default selection for new bots: first available instance, claude preferred
+// default selection for new bots: prefer cloud API providers that are ready,
+// then Claude CLI, then whatever else is available
 async function defaultSelection() {
   const described = await registry.describe();
   const available = described.filter((d) => d.snapshot.state === "available");
-  const pick = available.find((d) => d.driverKind === "claudeAgent") ?? available[0] ?? described[0];
-  return { instanceId: pick?.instanceId ?? "claude", model: pick?.models.default || "claude-sonnet-5" };
+  const pick =
+    available.find((d) => d.driverKind === "ollama") ??
+    available.find((d) => d.driverKind === "grok") ??
+    available.find((d) => d.driverKind === "claudeAgent") ??
+    available[0] ??
+    described[0];
+  return {
+    instanceId: pick?.instanceId ?? "ollama",
+    model: pick?.models.default || "gpt-oss:120b",
+  };
 }
-let bootSelection = { instanceId: "claude", model: "claude-sonnet-5" };
-const store = new Store(() => bootSelection);
+let bootSelection = { instanceId: "ollama", model: "gpt-oss:120b" };
+const tenants = new TenantStores(() => bootSelection);
 bootSelection = await defaultSelection();
-store.seedIfEmpty();
+const desktopStore = tenants.desktop();
+if (!SAAS_MODE) desktopStore.seedIfEmpty();
 
-// ── SSE fan-out to clients ─────────────────────────────────────────────
-const sseClients = new Set<ServerResponse>();
-function broadcast(payload: unknown) {
+function storeForBot(botId: string) {
+  if (!SAAS_MODE) return desktopStore;
+  return tenants.findByBotId(botId)?.store ?? null;
+}
+
+function ownerForThread(threadId: string) {
+  if (!SAAS_MODE) return { userId: "__desktop__", store: desktopStore };
+  return tenants.findByThread(threadId);
+}
+
+// ── SSE fan-out to clients (scoped per user in SaaS) ───────────────────
+const sseClients = new Map<string, Set<ServerResponse>>();
+function broadcastTo(userId: string, payload: unknown) {
   const frame = `data: ${JSON.stringify(payload)}\n\n`;
-  for (const res of [...sseClients]) {
+  const set = sseClients.get(userId);
+  if (!set) return;
+  for (const res of [...set]) {
     try {
       res.write(frame);
+      // Node / some proxies buffer until flush — keep EventSource live.
+      const flushable = res as ServerResponse & { flush?: () => void };
+      flushable.flush?.();
     } catch {
-      sseClients.delete(res);
+      set.delete(res);
     }
   }
 }
@@ -133,6 +164,10 @@ const toolMessageByItem = new Map<string, string>(); // itemId -> messageId
 const askMessageByRequest = new Map<string, string>(); // requestId -> messageId
 
 bus.subscribe((event: RuntimeEvent) => {
+  const owned = ownerForThread(event.threadId);
+  if (!owned) return;
+  const { userId, store } = owned;
+  const broadcast = (payload: unknown) => broadcastTo(userId, payload);
   broadcast({ kind: "runtime", event });
   const bot = store.botByThread(event.threadId);
   if (!bot) return;
@@ -215,26 +250,29 @@ bus.subscribe((event: RuntimeEvent) => {
   }
 });
 
-// ── live screen: poll the bot's box while it works ────────────────────
-// Frames stream to clients as SSE {kind:'screen'} (the "Bot's screen"
-// panel); the final frame is folded into the transcript on turn end.
+function boxOwnerFor(userId: string | null | undefined, botId: string): box.BoxOwner {
+  if (SAAS_MODE && userId && userId !== "__desktop__") return { kind: "user", userId };
+  return { kind: "bot", botId };
+}
+
+// ── live screen: poll the owner's box while the bot works ─────────────
 type Frame = { png: string; mime: string };
 const screenPollers = new Map<
   string,
-  { timer: ReturnType<typeof setInterval>; capture: () => Promise<void>; last: Frame | null }
+  { timer: ReturnType<typeof setInterval>; capture: () => Promise<void>; last: Frame | null; userId: string }
 >();
 
-function startScreenPoller(botId: string) {
+function startScreenPoller(botId: string, owner: box.BoxOwner, userId: string) {
   if (screenPollers.has(botId) || !box.boxConfigured(cfg)) return;
   let inFlight = false;
   const capture = async () => {
     if (inFlight) return;
     inFlight = true;
     try {
-      const { png, format } = await box.screenshotBox(cfg, botId);
-      const frame = { png, mime: format === "jpeg" ? "image/jpeg" : "image/png" };
+      const { png } = await box.screenshotBox(cfg, owner);
+      const frame = { png, mime: "image/png" as const };
       entry.last = frame;
-      broadcast({ kind: "screen", botId, ...frame });
+      broadcastTo(userId, { kind: "screen", botId, ...frame });
     } catch {
       /* box asleep or mid-command — try again next tick */
     } finally {
@@ -245,6 +283,7 @@ function startScreenPoller(botId: string) {
     timer: setInterval(capture, 4000),
     capture,
     last: null as Frame | null,
+    userId,
   };
   screenPollers.set(botId, entry);
 }
@@ -283,6 +322,11 @@ function readCuaConnection(): { command: string; args: string[]; env: Record<str
 
 // ── turn dispatch (upstream ProviderCommandReactor, miniature) ──────────
 async function startTurn(botId: string, text: string, opts?: { commsDepth?: number }) {
+  const owned = SAAS_MODE ? tenants.findByBotId(botId) : { userId: "__desktop__", store: desktopStore };
+  const store = owned?.store;
+  if (!store) throw Object.assign(new Error("no such bot"), { status: 404 });
+  const userId = owned!.userId;
+  const broadcast = (payload: unknown) => broadcastTo(userId, payload);
   const bot = store.bot(botId);
   if (!bot) throw Object.assign(new Error("no such bot"), { status: 404 });
   if (bot.busy) throw Object.assign(new Error("the bot is already working — interrupt it first"), { status: 409 });
@@ -298,6 +342,7 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
 
   const userMessage = store.appendMessage(bot.threadId, { role: "user", kind: "text", text });
   broadcast({ kind: "message", threadId: bot.threadId, message: userMessage });
+  // Returned to the HTTP caller so the UI can paint the bubble even if SSE lags.
 
   // transcript for API-backed drivers: settled text turns only
   const transcript = store
@@ -320,25 +365,126 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
   store.patchBot(bot.id, { busy: true, unread: false });
   broadcast({ kind: "bot", bot: store.bot(bot.id) });
 
+  turnDispatchAborts.get(bot.id)?.abort();
+  const dispatchAbort = new AbortController();
+  turnDispatchAborts.set(bot.id, dispatchAbort);
+
   void (async () => {
     try {
+      if (dispatchAbort.signal.aborted) return;
+
+      const light = composio.isLightChatTurn(text);
+      const recentUserTexts = transcript
+        .filter((m) => m.role === "user")
+        .map((m) => m.text)
+        .slice(-8);
+      const pluginIntent = composio.resolvePluginIntent(text, recentUserTexts);
+      const explicitComputer = composio.messageNeedsComputer(text);
+
+      // Resolve connected apps early so email/calendar turns can skip the desktop.
+      let connectedSlugs: string[] = [];
+      if (composio.connectorsConfigured(cfg) && !light) {
+        connectedSlugs = await Promise.race([
+          composio
+            .listConnectedToolkitSlugs(cfg, SAAS_MODE && userId !== "__desktop__" ? userId : undefined)
+            .catch((e) => {
+              console.warn("[composio] connected slugs:", e instanceof Error ? e.message : e);
+              return [] as string[];
+            }),
+          new Promise<string[]>((resolve) => setTimeout(() => resolve([]), 4_000)),
+        ]);
+      }
+      if (dispatchAbort.signal.aborted) return;
+
+      const pluginCoversIntent = Boolean(pluginIntent && connectedSlugs.includes(pluginIntent));
+      // Plugin intents (email/calendar/youtube/…) never get a computer session unless the
+      // user explicitly asks for desktop/browser — otherwise GPT-OSS opens Chrome
+      // (jina.ai / "Choose your search engine") instead of Composio tools.
+      const omitComputerForPlugin =
+        Boolean(pluginIntent) && !explicitComputer && instance.driverKind !== "boxAgent";
+      // SaaS: only attach the shared VM when the user asks for computer/desktop work.
+      // Auto-attaching on every cloud-bot turn caused LIVE DESKTOP on calendar/email typos.
+      const needsComputer =
+        instance.driverKind === "boxAgent" ||
+        explicitComputer ||
+        (!SAAS_MODE && !light && !omitComputerForPlugin && bot.computer === "cloud");
+
       const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
-      if (cfg.composio?.key) integrations.composio = { key: cfg.composio.key, url: cfg.composio.url };
-      const wants = bot.computer; // 'cloud' | 'local' | 'off' | undefined(auto)
-      if (wants !== "off" && wants !== "local" && box.boxConfigured(cfg)) {
-        let b = await box.findBox(cfg, bot.id).catch(() => null);
-        // the Computer driver runs ON the box — provision it on first use
-        if (!b && instance.driverKind === "boxAgent") {
-          broadcast({ kind: "computer", botId: bot.id, state: "provisioning" });
-          await box.provisionBox(cfg, bot.id, bot.name);
-          b = await box.findBox(cfg, bot.id).catch(() => null);
+      // Attach Composio whenever ck_ and/or ak_ is configured (ak_-only uses Platform tools).
+      // Light greetings still get the integration stub — Ollama skips tool listing for light turns.
+      if (composio.connectorsConfigured(cfg)) {
+        integrations.composio = {
+          key: composio.resolveConnectKey(cfg),
+          url: cfg.composio?.url,
+          apiKey: composio.resolveApiKey(cfg),
+          ...(SAAS_MODE && userId !== "__desktop__" ? { userId } : {}),
+          ...(pluginIntent ? { preferToolkit: pluginIntent } : {}),
+        };
+        if (omitComputerForPlugin) {
+          console.log(
+            `[turn] omitting computer for ${pluginIntent} intent (connected=${pluginCoversIntent ? "yes" : connectedSlugs.join(",") || "none"})`,
+          );
         }
-        if (b) integrations.computer = { boxId: b.id, token: cfg.box!.token! };
+      }
+      const wants = bot.computer; // 'cloud' | 'local' | 'off' | undefined(auto)
+      const owner = boxOwnerFor(userId, bot.id);
+      const canUseComputerTools =
+        instance.adapter.capabilities.toolsInProcess === true ||
+        instance.driverKind === "claudeAgent" ||
+        instance.driverKind === "boxAgent";
+
+      // Never block chat on Box provision for messages that don't need a computer.
+      // Attach existing boxes only when this turn actually needs desktop tools.
+      if (wants !== "off" && wants !== "local" && box.boxConfigured(cfg) && needsComputer) {
+        let b = await box.findBox(cfg, owner).catch(() => null);
+        if (dispatchAbort.signal.aborted) return;
+        const shouldAutoProvision =
+          !b &&
+          needsComputer &&
+          (instance.driverKind === "boxAgent" || (SAAS_MODE && canUseComputerTools));
+        let computerError: string | null = null;
+        if (shouldAutoProvision) {
+          broadcast({ kind: "computer", botId: bot.id, state: "provisioning" });
+          try {
+            await box.provisionBox(cfg, owner, SAAS_MODE ? "Team" : bot.name);
+          } catch (e) {
+            computerError = e instanceof Error ? e.message : String(e);
+            console.warn("[computer] provision failed:", computerError);
+            if (!SAAS_MODE && instance.driverKind === "boxAgent") throw e;
+          }
+          if (dispatchAbort.signal.aborted) return;
+          b = await box.findBox(cfg, owner).catch(() => null);
+        } else if (b && !["idle", "ready", "running"].includes(String(b.state))) {
+          try {
+            await box.joinBox(cfg, owner);
+            b = await box.findBox(cfg, owner).catch(() => null);
+          } catch (e) {
+            computerError = e instanceof Error ? e.message : String(e);
+            console.warn("[computer] wake failed:", computerError);
+          }
+        }
+        if (dispatchAbort.signal.aborted) return;
+        // Attach computer tools only when the turn needs them — otherwise GPT-OSS
+        // runs a non-streaming tool round for "hi" and appears hung.
+        if (b && cfg.box?.token) {
+          integrations.computer = { boxId: b.id, token: cfg.box.token };
+        } else if (canUseComputerTools && !computerError) {
+          computerError =
+            "cloud computer is not available right now — open Computer and retry, or check BOX_TOKEN / Box billing";
+        }
+        if (computerError && canUseComputerTools && !integrations.computer) {
+          const notice = store.appendMessage(bot.threadId, {
+            role: "bot",
+            kind: "activity",
+            tool: { name: `computer: ${computerError.slice(0, 140)}`, ok: false },
+          });
+          broadcast({ kind: "message", threadId: bot.threadId, message: notice });
+        }
       }
       // local computer (this Mac) via the Electron-hosted cua-driver: the
       // Electron main process owns the daemon (TCC attribution) and writes
       // its spawn contract to cua-connection.json; the harness only reads it
-      if (!integrations.computer && wants !== "off" && wants !== "cloud") {
+      if (!integrations.computer && needsComputer && wants !== "off" && wants !== "cloud") {
         const cua = readCuaConnection();
         if (cua) integrations.localComputer = cua;
       }
@@ -366,6 +512,70 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
           )
         : [];
 
+      let connectedLabels: string[] = [];
+      if (integrations.composio && !light) {
+        if (connectedSlugs.length) {
+          connectedLabels = connectedSlugs
+            .map((slug) => {
+              const curated = (
+                [
+                  ["gmail", "Gmail"],
+                  ["googlecalendar", "Google Calendar"],
+                  ["slack", "Slack"],
+                  ["github", "GitHub"],
+                  ["notion", "Notion"],
+                  ["googlesheets", "Google Sheets"],
+                  ["googledocs", "Google Docs"],
+                  ["googledrive", "Google Drive"],
+                ] as const
+              ).find(([s]) => s === slug);
+              return curated?.[1] ?? slug;
+            })
+            .sort((a, b) => a.localeCompare(b));
+        } else {
+          connectedLabels = await Promise.race([
+            composio.listConnectedToolkitLabels(cfg, integrations.composio.userId ?? userId).catch((e) => {
+              console.warn("[composio] connected labels:", e instanceof Error ? e.message : e);
+              return [] as string[];
+            }),
+            new Promise<string[]>((resolve) => setTimeout(() => resolve([]), 4_000)),
+          ]);
+        }
+      }
+      if (dispatchAbort.signal.aborted) return;
+
+      const pluginsHint =
+        pluginIntent === "gmail"
+          ? ` Connected apps: ${connectedLabels.join(", ") || "Gmail"}. The user asked about email — you MUST call GMAIL_FETCH_EMAILS (or GMAIL_LIST_MESSAGES / GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID) with a high maxResults (50–100). If nextPageToken is present, keep paging until you have every message needed. For any row missing subject/from/date, call GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID. NEVER invent emails, NEVER pad with "(same)", "—", or "data not shown". If a field is missing after tools, say so — do not guess. Do NOT open a browser, screenshot, or use the cloud desktop.`
+          : pluginIntent && connectedSlugs.includes(pluginIntent)
+            ? ` Connected apps (ACTIVE): ${connectedLabels.join(", ") || pluginIntent}. ${pluginIntent} IS connected — never say it is missing. You MUST use the matching Composio ${pluginIntent.toUpperCase()}_* tools now. Do NOT invent missing records. Do NOT open a browser/desktop for this.`
+            : pluginCoversIntent
+              ? ` Connected apps: ${connectedLabels.join(", ") || pluginIntent}. The user asked about ${pluginIntent} — you MUST use the matching Composio ${pluginIntent?.toUpperCase()}_* tools. Do NOT invent missing records. Do NOT open a browser, screenshot, or use the cloud desktop for this request.`
+              : connectedLabels.length > 0
+                ? ` Connected apps (ACTIVE): ${connectedLabels.join(", ")}. Never claim one of these is disconnected. Prefer these Composio plugin tools over the browser for email, calendar, YouTube, docs, drive, chat, and similar. For requests like "read my last emails", "check my calendar", or "what can you do with my youtube plugin", call the matching app tools directly with enough page size / pagination to return complete real data — never invent or placeholder-fill rows. Do NOT open connected apps in the cloud browser/VM unless the user explicitly asks for desktop/browser/VM, no plugin covers the task, or visual UI work is required.`
+                : integrations.composio
+                  ? " Composio plugin tools may be available when apps are connected in Plugins — prefer those tools over opening a browser for email/calendar/docs."
+                  : "";
+
+      const sharedDesktopHint =
+        integrations.computer && SAAS_MODE
+          ? connectedLabels.length
+            ? " You also have a shared cloud Linux desktop. Use computer tools (screenshot, click, type_text, open_url, computer_exec) only when the user asks for the desktop/browser/VM, when no connected plugin covers the task, or when visual UI work is required — never as a substitute for connected app tools like Gmail."
+            : " You have full access to one shared cloud Linux desktop (the team computer) — the only computer you can control. Files, browser sessions, and the screen are shared with the user's other bots. When the user asks about the VM, the desktop, screenshots, or running commands, actively use the computer tools: screenshot, click, type_text, press_key, scroll, open_url, and computer_exec. Do not claim you lack a computer or only have limited access when these tools are available."
+          : integrations.computer && instance.driverKind !== "boxAgent"
+            ? connectedLabels.length
+              ? " You also have a cloud computer — prefer connected Composio apps for email/calendar/docs; use screenshot/computer_exec/open_url only when the user asks for desktop/browser or plugins cannot do the job."
+              : " You have your own cloud computer — use the computer tools (screenshot, computer_exec, open_url) whenever browsing or acting on a desktop helps."
+            : integrations.localComputer
+              ? " You can act on the user's computer through the computer tools — take a screenshot or read the desktop state first, prefer accessibility actions over raw coordinates, and act carefully."
+              : canUseComputerTools &&
+                  needsComputer &&
+                  wants !== "off" &&
+                  wants !== "local" &&
+                  box.boxConfigured(cfg)
+                ? " The cloud computer could not be attached for this turn — tell the user to open the Computer panel and retry, and do not invent desktop actions."
+                : "";
+
       await instance.adapter.sendTurn({
         threadId: bot.threadId,
         text,
@@ -374,11 +584,8 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
         transcript,
         system:
           persona +
-          (integrations.computer && instance.driverKind !== "boxAgent"
-            ? " You have your own cloud computer — use the computer tools (screenshot, computer_exec, open_url) whenever browsing or acting on a desktop helps."
-            : integrations.localComputer
-              ? " You can act on the user's computer through the computer tools — take a screenshot or read the desktop state first, prefer accessibility actions over raw coordinates, and act carefully."
-              : "") +
+          pluginsHint +
+          sharedDesktopHint +
           (integrations.agents
             ? " You can work with the user's other bots through the agents tools — list_bots shows who's available, ask_bot sends one of them a message and returns their reply."
             : "") +
@@ -389,8 +596,9 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
             : ""),
         integrations,
       });
-      if (integrations.computer) startScreenPoller(bot.id);
+      if (integrations.computer) startScreenPoller(bot.id, owner, userId);
     } catch (e) {
+      if (dispatchAbort.signal.aborted) return;
       const message = e instanceof Error ? e.message : String(e);
       const failure = store.appendMessage(bot.threadId, {
         role: "bot",
@@ -400,15 +608,27 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
       broadcast({ kind: "message", threadId: bot.threadId, message: failure });
       store.patchBot(bot.id, { busy: false });
       broadcast({ kind: "bot", bot: store.bot(bot.id) });
+    } finally {
+      if (turnDispatchAborts.get(bot.id) === dispatchAbort) turnDispatchAborts.delete(bot.id);
     }
   })();
+
+  return { threadId: bot.threadId, message: userMessage };
 }
 
 // ── config hot-reload ─────────────────────────────────────────────────
 function configStatus() {
+  const connectKey = composio.resolveConnectKey(cfg);
+  const apiKey = composio.resolveApiKey(cfg);
   return {
     xai: { configured: Boolean(cfg.xai?.key) },
-    composio: { configured: Boolean(cfg.composio?.key), apiKeyConfigured: Boolean(cfg.composio?.apiKey) },
+    ollama: { configured: Boolean(cfg.ollama?.key) },
+    // configured = Connect ck_ only (App Settings row). Add apps also works with apiKey alone.
+    composio: {
+      configured: Boolean(connectKey),
+      apiKeyConfigured: Boolean(apiKey),
+      connectorsReady: composio.connectorsConfigured(cfg),
+    },
     box: { configured: Boolean(cfg.box?.token) },
     // not a secret — the sidebar shows it
     profile: { name: cfg.profile?.name ?? "", email: cfg.profile?.email ?? "" },
@@ -454,6 +674,79 @@ const server = createServer(async (req, res) => {
   const path = url.pathname;
   const method = req.method ?? "GET";
   try {
+    // ── SaaS auth (public) ─────────────────────────────────────────────
+    if (SAAS_MODE && path.startsWith("/api/auth/")) {
+      if (method === "POST" && path === "/api/auth/signup") {
+        const body = await readBody(req);
+        const user = await auth.createUser({
+          email: String(body.email ?? ""),
+          password: String(body.password ?? ""),
+          name: body.name ? String(body.name) : undefined,
+        });
+        await tenants.touch(user.id);
+        auth.issueSession(res, user.id);
+        return json(res, 201, { user: auth.toPublic(user), mode: "saas" });
+      }
+      if (method === "POST" && path === "/api/auth/login") {
+        const body = await readBody(req);
+        const user = await auth.authenticate(String(body.email ?? ""), String(body.password ?? ""));
+        await tenants.touch(user.id);
+        auth.issueSession(res, user.id);
+        return json(res, 200, { user: auth.toPublic(user), mode: "saas" });
+      }
+      if (method === "POST" && path === "/api/auth/logout") {
+        auth.clearSession(res);
+        return json(res, 200, { ok: true });
+      }
+      if (method === "GET" && path === "/api/auth/me") {
+        const user = await auth.userFromRequest(req);
+        if (!user) return json(res, 401, { error: "unauthorized", mode: "saas" });
+        await tenants.touch(user.id);
+        return json(res, 200, { user: auth.toPublic(user), mode: "saas" });
+      }
+      return json(res, 404, { error: "unknown auth endpoint" });
+    }
+
+    if (SAAS_MODE && method === "GET" && path === "/api/saas") {
+      return json(res, 200, { mode: "saas", plan: SAAS_PLAN });
+    }
+
+    // ── resolve tenant store ───────────────────────────────────────────
+    let store = desktopStore;
+    let saasUser: auth.SaasUser | null = null;
+    let sseUserId = "__desktop__";
+    if (SAAS_MODE && path.startsWith("/api/") && !path.startsWith("/api/internal/")) {
+      saasUser = await auth.userFromRequest(req);
+      if (!saasUser) return json(res, 401, { error: "unauthorized", mode: "saas" });
+      store = await tenants.touch(saasUser.id);
+      sseUserId = saasUser.id;
+    }
+    const broadcastUser = (payload: unknown) => broadcastTo(sseUserId, payload);
+
+    // ── billing (SaaS) ─────────────────────────────────────────────────
+    if (SAAS_MODE && path.startsWith("/api/billing/")) {
+      if (method === "GET" && path === "/api/billing/status") {
+        return json(res, 200, {
+          user: auth.toPublic(saasUser!),
+          plan: SAAS_PLAN,
+          stripeConfigured: Boolean(process.env.STRIPE_SECRET_KEY),
+        });
+      }
+      if (method === "POST" && path === "/api/billing/checkout") {
+        // Local / until Stripe keys exist: activate a paid month immediately.
+        // When STRIPE_SECRET_KEY is set, replace this with Stripe Checkout.
+        if (process.env.STRIPE_SECRET_KEY) {
+          return json(res, 501, {
+            error: "Stripe Checkout not wired yet — set up a Price and replace this stub",
+            plan: SAAS_PLAN,
+          });
+        }
+        const updated = await auth.activateLocalSubscription(saasUser!.id);
+        return json(res, 200, { user: auth.toPublic(updated!), local: true });
+      }
+      return json(res, 404, { error: "unknown billing endpoint" });
+    }
+
     // ── internal peer-agent comms (localhost + shared token only) ──────
     // The agents-proxy (spawned inside a bot's agent process) calls these to
     // discover peers and hand a message to one. Not part of the public API.
@@ -463,7 +756,9 @@ const server = createServer(async (req, res) => {
       }
       if (method === "GET" && path === "/api/internal/agents") {
         const self = url.searchParams.get("self");
-        const bots = store.bots
+        const owned = self ? tenants.findByBotId(self) : null;
+        const s = owned?.store ?? desktopStore;
+        const bots = s.bots
           .filter((b) => b.id !== self && !b.hidden)
           .map((b) => ({ id: b.id, name: b.name, model: b.modelSelection.model, busy: !!b.busy }));
         return json(res, 200, { bots });
@@ -477,20 +772,20 @@ const server = createServer(async (req, res) => {
         if (!toBotId || !message) return json(res, 400, { error: "toBotId and message required" });
         if (toBotId === fromBotId) return json(res, 400, { error: "a bot cannot message itself" });
         if (depth >= MAX_COMMS_DEPTH) return json(res, 200, { error: "message chains are limited to one hop" });
-        const target = store.bot(toBotId);
+        const owned = tenants.findByBotId(fromBotId) ?? { userId: "__desktop__", store: desktopStore };
+        const s = owned.store;
+        const target = s.bot(toBotId);
         if (!target) return json(res, 404, { error: "no such bot" });
         if (target.busy) return json(res, 200, { busy: true });
-        // visibility: surface the cross-talk on the caller's own thread so
-        // bot-to-bot turns are never invisible (they cost the user tokens)
-        const from = store.bot(fromBotId);
+        const from = s.bot(fromBotId);
         const fromName = from?.name ?? "another bot";
         if (from) {
-          const note = store.appendMessage(from.threadId, {
+          const note = s.appendMessage(from.threadId, {
             role: "bot",
             kind: "activity",
             tool: { name: `asked @${target.name}: ${message.slice(0, 80)}` },
           });
-          broadcast({ kind: "message", threadId: from.threadId, message: note });
+          broadcastTo(owned.userId, { kind: "message", threadId: from.threadId, message: note });
         }
         const prefixed = `[Message from @${fromName}, another bot in this OpenMausBot workspace. Reply to them.]\n\n${message}`;
         const reply = await askBotAndWait(toBotId, prefixed, depth);
@@ -501,21 +796,32 @@ const server = createServer(async (req, res) => {
 
     // ── events stream ──
     if (method === "GET" && path === "/api/events") {
+      // X-Accel-Buffering + flushHeaders: Vite/nginx must not hold SSE frames.
       res.writeHead(200, {
-        "content-type": "text/event-stream",
-        "cache-control": "no-cache",
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache, no-transform",
         connection: "keep-alive",
+        "x-accel-buffering": "no",
       });
+      res.flushHeaders?.();
       res.write(`data: ${JSON.stringify({ kind: "hello" })}\n\n`);
-      sseClients.add(res);
+      const flushable = res as ServerResponse & { flush?: () => void };
+      flushable.flush?.();
+      let set = sseClients.get(sseUserId);
+      if (!set) {
+        set = new Set();
+        sseClients.set(sseUserId, set);
+      }
+      set.add(res);
       const keepalive = setInterval(() => {
         try {
           res.write(": keepalive\n\n");
+          flushable.flush?.();
         } catch {}
-      }, 25_000);
+      }, 15_000);
       req.on("close", () => {
         clearInterval(keepalive);
-        sseClients.delete(res);
+        set!.delete(res);
       });
       return;
     }
@@ -527,6 +833,9 @@ const server = createServer(async (req, res) => {
       });
     }
     if (method === "POST" && path === "/api/bots") {
+      if (SAAS_MODE && saasUser && !auth.canChat(saasUser)) {
+        return json(res, 402, { error: "subscription required", plan: SAAS_PLAN });
+      }
       const bot = store.createBot();
       store.patchBot(bot.id, { modelSelection: await defaultSelection() });
       return json(res, 201, { bot: { ...store.bot(bot.id)!, messages: store.messagesFor(bot.threadId) } });
@@ -540,7 +849,7 @@ const server = createServer(async (req, res) => {
       }
       const bot = store.patchBot(m[1], patch);
       if (!bot) return json(res, 404, { error: "no such bot" });
-      broadcast({ kind: "bot", bot });
+      broadcastUser({ kind: "bot", bot });
       return json(res, 200, { bot });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)$/);
@@ -556,7 +865,7 @@ const server = createServer(async (req, res) => {
           unlinkSync(join(dir, `${bot.threadId}.ndjson`));
         } catch {}
       }
-      broadcast({ kind: "bot.deleted", botId: bot.id });
+      broadcastUser({ kind: "bot.deleted", botId: bot.id });
       return json(res, 200, { ok: true });
     }
 
@@ -575,16 +884,19 @@ const server = createServer(async (req, res) => {
           ...(body.dismissed !== undefined ? { dismissed: body.dismissed } : {}),
         },
       });
-      broadcast({ kind: "message.patch", threadId: bot.threadId, message: patched });
+      broadcastUser({ kind: "message.patch", threadId: bot.threadId, message: patched });
       return json(res, 200, { message: patched });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/messages$/);
     if (m && method === "POST") {
+      if (SAAS_MODE && saasUser && !auth.canChat(saasUser)) {
+        return json(res, 402, { error: "subscription required — start your plan to chat", plan: SAAS_PLAN });
+      }
       const body = await readBody(req);
       const text = String(body.text ?? "").trim();
       if (!text) return json(res, 400, { error: "text required" });
-      await startTurn(m[1], text);
-      return json(res, 202, { ok: true });
+      const started = await startTurn(m[1], text);
+      return json(res, 202, { ok: true, threadId: started.threadId, message: started.message });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/respond$/);
     if (m && method === "POST") {
@@ -603,8 +915,13 @@ const server = createServer(async (req, res) => {
     if (m && method === "POST") {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      turnDispatchAborts.get(bot.id)?.abort();
+      turnDispatchAborts.delete(bot.id);
       const instance = registry.get(bot.modelSelection.instanceId);
       await instance?.adapter.interruptTurn(bot.threadId);
+      // Clear busy even if sendTurn never started (stuck in Box/Composio prep).
+      store.patchBot(bot.id, { busy: false });
+      broadcastUser({ kind: "bot", bot: store.bot(bot.id) });
       return json(res, 200, { ok: true });
     }
 
@@ -627,57 +944,139 @@ const server = createServer(async (req, res) => {
     if ((method === "PUT" || method === "PATCH") && path === "/api/config") {
       const body = await readBody(req);
       const patch: Record<string, object> = {};
-      for (const key of ["xai", "composio", "box", "profile"] as const) {
+      // SaaS: platform owns model keys (ollama/xai/box). Profile + Composio
+      // Connect (ck_…) / catalog (ak_…) keys are still pasteable so plugins
+      // work without hand-editing .env — saveConfig hot-reloads into `cfg`.
+      const allowed = SAAS_MODE
+        ? (["profile", "composio"] as const)
+        : (["xai", "ollama", "composio", "box", "profile"] as const);
+      for (const key of allowed) {
         if (body[key] && typeof body[key] === "object") patch[key] = body[key];
       }
-      if (!Object.keys(patch).length) return json(res, 400, { error: "nothing to save" });
+      if (patch.composio && typeof patch.composio === "object") {
+        const c = patch.composio as { key?: string; apiKey?: string };
+        const keyVal = typeof c.key === "string" ? c.key.trim() : "";
+        const apiVal = typeof c.apiKey === "string" ? c.apiKey.trim() : "";
+        if (keyVal.startsWith("ak_")) {
+          return json(res, 400, {
+            error:
+              "That looks like a project API key (ak_…). Paste it in the Composio API key field — Add apps works with ak_ alone. The Connect field needs ck_… from dashboard → Install (AI Clients).",
+          });
+        }
+        if (keyVal && !keyVal.startsWith("ck_") && keyVal.length > 0) {
+          return json(res, 400, {
+            error: "Composio Connect key should start with ck_… (from dashboard → Install / AI Clients).",
+          });
+        }
+        if (apiVal.startsWith("ck_")) {
+          return json(res, 400, {
+            error: "That looks like a Connect key (ck_…). Paste it in the Composio Connect key field, not API key.",
+          });
+        }
+        if (apiVal && !apiVal.startsWith("ak_")) {
+          return json(res, 400, {
+            error: "Composio API key should start with ak_… (from Platform → project → Settings → API Keys).",
+          });
+        }
+      }
+      if (!Object.keys(patch).length) {
+        return json(res, 400, {
+          error: SAAS_MODE
+            ? "nothing to save — model keys are platform-hosted; use profile or composio"
+            : "nothing to save",
+        });
+      }
       saveConfig(patch);
       Object.assign(cfg, loadConfig());
-      // provider keys change the fleet; a profile edit must not kill
-      // in-flight turns with a pointless reload
-      if (Object.keys(patch).some((k) => k !== "profile")) await reloadProviders();
+      // provider keys change the fleet; profile / composio edits must not
+      // kill in-flight turns (composio is read from `cfg` on each request)
+      if (Object.keys(patch).some((k) => k !== "profile" && k !== "composio")) await reloadProviders();
       const status = configStatus();
-      broadcast({ kind: "config", ...status });
+      broadcastUser({ kind: "config", ...status });
       return json(res, 200, status);
     }
 
     // ── connectors (Composio) ──
     if (method === "GET" && path === "/api/connectors/catalog") {
       const { cards, source } = await composio.listToolkits(cfg);
-      return json(res, 200, { configured: Boolean(cfg.composio?.key), source, cards });
+      return json(res, 200, {
+        configured: composio.connectorsConfigured(cfg),
+        source,
+        cards,
+      });
     }
     if (method === "GET" && path === "/api/connectors") {
       const services = (url.searchParams.get("services") ?? "").split(",").filter(Boolean);
-      if (!cfg.composio?.key) return json(res, 200, { configured: false, services: {} });
-      const status = await composio.connectionStatus(cfg, services.length ? services : composio.CURATED_SLUGS);
-      return json(res, 200, { configured: true, services: status });
+      if (!composio.connectorsConfigured(cfg)) {
+        return json(res, 200, { configured: false, services: {} });
+      }
+      try {
+        const status = await composio.connectionStatus(
+          cfg,
+          services.length ? services : composio.CURATED_SLUGS,
+          saasUser?.id,
+        );
+        return json(res, 200, { configured: true, services: status, userId: saasUser?.id ?? null });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        console.warn("[composio] connectionStatus:", message);
+        return json(res, 502, { error: message, configured: true, services: {} });
+      }
     }
     m = path.match(/^\/api\/connectors\/([\w-]+)\/authorize$/);
-    if (m && method === "POST") return json(res, 200, await composio.authorizeService(cfg, m[1]));
+    if (m && method === "POST") {
+      try {
+        const out = await composio.authorizeService(cfg, m[1], saasUser?.id);
+        composio.clearToolsCache();
+        return json(res, 200, out);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        console.warn("[composio] authorize:", message);
+        return json(res, 502, { error: message });
+      }
+    }
     m = path.match(/^\/api\/connectors\/([\w-]+)$/);
-    if (m && method === "DELETE") return json(res, 200, await composio.removeService(cfg, m[1]));
+    if (m && method === "DELETE") {
+      try {
+        const out = await composio.removeService(cfg, m[1], saasUser?.id);
+        composio.clearToolsCache();
+        return json(res, 200, out);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        console.warn("[composio] remove:", message);
+        return json(res, 502, { error: message });
+      }
+    }
 
-    // ── the bot's cloud computer (Box) ──
+    // ── cloud computer (Box) — SaaS: shared per user; desktop: per bot ──
     m = path.match(/^\/api\/bots\/([\w-]+)\/computer$/);
-    if (m && method === "GET") return json(res, 200, await box.boxStatus(cfg, m[1]));
+    if (m && method === "GET") {
+      const botId = m[1];
+      const bot = store.bot(botId);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      const owner = boxOwnerFor(saasUser?.id ?? sseUserId, botId);
+      return json(res, 200, await box.boxStatus(cfg, owner));
+    }
     m = path.match(/^\/api\/bots\/([\w-]+)\/computer\/(provision|join|sleep|exec|screenshot)$/);
     if (m && method === "POST") {
       const botId = m[1];
       const bot = store.bot(botId);
       if (!bot) return json(res, 404, { error: "no such bot" });
+      const owner = boxOwnerFor(saasUser?.id ?? sseUserId, botId);
+      const label = SAAS_MODE ? "Team" : bot.name;
       switch (m[2]) {
         case "provision":
-          return json(res, 200, await box.provisionBox(cfg, botId, bot.name));
+          return json(res, 200, await box.provisionBox(cfg, owner, label));
         case "join":
-          return json(res, 200, await box.joinBox(cfg, botId));
+          return json(res, 200, await box.joinBox(cfg, owner));
         case "sleep":
-          return json(res, 200, await box.sleepBox(cfg, botId));
+          return json(res, 200, await box.sleepBox(cfg, owner));
         case "exec": {
           const body = await readBody(req);
-          return json(res, 200, await box.execOnBox(cfg, botId, String(body.command ?? "")));
+          return json(res, 200, await box.execOnBox(cfg, owner, String(body.command ?? "")));
         }
         case "screenshot":
-          return json(res, 200, await box.screenshotBox(cfg, botId));
+          return json(res, 200, await box.screenshotBox(cfg, owner));
       }
     }
 
@@ -709,8 +1108,8 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, "127.0.0.1", () => {
-  console.log(`openmausbot server on http://127.0.0.1:${PORT}`);
+server.listen(PORT, SAAS_HOST, () => {
+  console.log(`openmausbot server on http://${SAAS_HOST === "0.0.0.0" ? "127.0.0.1" : SAAS_HOST}:${PORT}${SAAS_MODE ? " (saas)" : ""}`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

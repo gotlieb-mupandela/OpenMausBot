@@ -36,8 +36,18 @@ export function ComputerMark({ size = 16, className }: IconProps) {
   return <Monitor size={size} className={cn("text-ink-secondary", className)} />;
 }
 
+export function OllamaMark({ size = 16, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={cn("fill-[#E8E8E8]", className)}>
+      <path d="M12 2.5c-1.4 0-2.6.8-3.2 2-.7-.2-1.5-.1-2.1.4-.7.6-1 1.5-.9 2.4-.8.5-1.3 1.4-1.3 2.4 0 .6.2 1.2.5 1.7-.5.6-.8 1.4-.8 2.2 0 1.3.8 2.5 2 3 .2 1.5 1.4 2.7 2.9 2.9.5.9 1.5 1.5 2.6 1.5s2.1-.6 2.6-1.5c1.5-.2 2.7-1.4 2.9-2.9 1.2-.5 2-1.7 2-3 0-.8-.3-1.6-.8-2.2.3-.5.5-1.1.5-1.7 0-1-.5-1.9-1.3-2.4.1-.9-.2-1.8-.9-2.4-.6-.5-1.4-.6-2.1-.4C14.6 3.3 13.4 2.5 12 2.5zm0 2c.9 0 1.7.5 2.1 1.3l.3.7.8-.2c.4-.1.8 0 1.1.3.3.3.4.7.4 1.1l-.1.8.7.4c.5.3.8.8.8 1.4 0 .5-.2.9-.6 1.2l-.6.4.3.7c.1.3.2.6.2.9 0 .9-.6 1.7-1.5 1.9l-.7.2-.2.7c-.2.7-.8 1.2-1.5 1.2s-1.3-.5-1.5-1.2l-.2-.7-.7-.2c-.9-.2-1.5-1-1.5-1.9 0-.3.1-.6.2-.9l.3-.7-.6-.4c-.4-.3-.6-.7-.6-1.2 0-.6.3-1.1.8-1.4l.7-.4-.1-.8c0-.4.1-.8.4-1.1.3-.3.7-.4 1.1-.3l.8.2.3-.7c.4-.8 1.2-1.3 2.1-1.3z" />
+    </svg>
+  );
+}
+
 export function ProviderMark({ driverKind, size, className }: IconProps & { driverKind: string }) {
   switch (driverKind) {
+    case "ollama":
+      return <OllamaMark size={size} className={className} />;
     case "grok":
     case "grokAgent":
       return <GrokMark size={size} className={className} />;
