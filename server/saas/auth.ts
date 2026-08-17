@@ -23,6 +23,8 @@ export interface SaasUser {
   subscriptionEndsAt: number | null;
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;
+  polarCustomerId?: string;
+  polarSubscriptionId?: string;
   googleId?: string;
   /** null = tour pending; number = done; undefined = legacy (skip tour) */
   onboardingCompletedAt?: number | null;
@@ -33,6 +35,8 @@ export interface PublicUser {
   email: string;
   name: string;
   needsOnboarding: boolean;
+  plus: boolean;
+  subscriptionStatus: SubscriptionStatus;
 }
 
 const USERS_DIR = join(DATA_DIR, "saas");
@@ -120,17 +124,24 @@ function fromConvexRow(row: cx.ConvexUserRow): SaasUser {
     subscriptionEndsAt: row.subscriptionEndsAt,
     stripeCustomerId: row.stripeCustomerId,
     stripeSubscriptionId: row.stripeSubscriptionId,
+    polarCustomerId: row.polarCustomerId,
+    polarSubscriptionId: row.polarSubscriptionId,
     googleId: row.googleId,
     onboardingCompletedAt: row.onboardingCompletedAt,
   };
 }
 
 export function toPublic(user: SaasUser): PublicUser {
+  const plus =
+    Boolean(user.polarSubscriptionId) &&
+    (user.subscriptionStatus === "active" || user.subscriptionStatus === "trialing");
   return {
     id: user.id,
     email: user.email,
     name: user.name,
     needsOnboarding: user.onboardingCompletedAt === null,
+    plus,
+    subscriptionStatus: user.subscriptionStatus,
   };
 }
 
@@ -278,6 +289,27 @@ export async function authenticate(email: string, password: string): Promise<Saa
     throw Object.assign(new Error("invalid email or password"), { status: 401 });
   }
   return user;
+}
+
+export async function patchSubscription(
+  userId: string,
+  patch: Partial<{
+    subscriptionStatus: SubscriptionStatus;
+    subscriptionEndsAt: number | null;
+    polarCustomerId: string;
+    polarSubscriptionId: string;
+  }>,
+): Promise<SaasUser | null> {
+  if (cx.convexConfigured()) {
+    const row = await cx.convexPatchSubscription(userId, patch);
+    return row ? fromConvexRow(row) : null;
+  }
+  const users = loadUsers();
+  const idx = users.findIndex((u) => u.id === userId);
+  if (idx === -1) return null;
+  users[idx] = { ...users[idx], ...patch };
+  saveUsers(users);
+  return users[idx];
 }
 
 export async function completeOnboarding(userId: string): Promise<SaasUser | null> {

@@ -14,6 +14,7 @@ import { MobileNavProvider } from "@/lib/mobile-nav";
 import { AuthScreen, type SaasUser } from "@/components/AuthScreen";
 import { NewBotWizard } from "@/components/NewBotWizard";
 import { SaasOnboarding } from "@/components/SaasOnboarding";
+import { BillingSuccess } from "@/components/BillingSuccess";
 
 function Shell({
   saasMode,
@@ -81,6 +82,7 @@ export default function App() {
   const [googleAuth, setGoogleAuth] = useState(false);
   const [gated, setGated] = useState(() => !emailGateDone());
   const [showSaasTour, setShowSaasTour] = useState(false);
+  const billingSuccess = window.location.pathname === "/billing/success";
 
   useEffect(() => {
     if (saasUser?.needsOnboarding) setShowSaasTour(true);
@@ -163,6 +165,18 @@ export default function App() {
 
   if (saasMode && !saasUser) {
     return <AuthScreen googleAuth={googleAuth} />;
+  }
+
+  if (saasMode && billingSuccess && saasUser) {
+    return (
+      <BillingSuccess
+        user={saasUser}
+        onContinue={(updated) => {
+          setSaasUser(updated);
+          window.history.replaceState({}, "", "/");
+        }}
+      />
+    );
   }
 
   return (

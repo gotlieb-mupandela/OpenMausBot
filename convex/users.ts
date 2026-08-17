@@ -174,6 +174,8 @@ export const patchSubscription = mutation({
     subscriptionEndsAt: v.optional(v.union(v.number(), v.null())),
     stripeCustomerId: v.optional(v.string()),
     stripeSubscriptionId: v.optional(v.string()),
+    polarCustomerId: v.optional(v.string()),
+    polarSubscriptionId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     assertHarness(args.secret);

@@ -136,6 +136,25 @@ export function AppSettingsPanel({
 
         {saasUser ? (
           <div className="mt-4 rounded-xl bg-card p-4">
+            <div className="text-[15px] font-medium text-ink">Aishe Plus</div>
+            <div className="mt-0.5 text-[13px] text-ink-secondary">
+              {saasUser.plus
+                ? "You're on Plus — N$350 / month."
+                : "N$350 / month. Subscribe with Polar to unlock Plus."}
+            </div>
+            {!saasUser.plus && (
+              <a
+                href="/api/billing/checkout"
+                className="mt-3 inline-flex rounded-lg bg-accent px-3 py-1.5 text-[13px] font-medium text-white hover:brightness-110"
+              >
+                Subscribe
+              </a>
+            )}
+          </div>
+        ) : null}
+
+        {saasUser ? (
+          <div className="mt-4 rounded-xl bg-card p-4">
             <div className="text-[15px] font-medium text-ink">Account</div>
             <div className="mt-0.5 truncate text-[13px] text-ink-secondary">{saasUser.email}</div>
             {onReplayTour && (

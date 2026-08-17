@@ -6,10 +6,16 @@ export interface SaasUser {
   email: string;
   name: string;
   needsOnboarding?: boolean;
+  plus?: boolean;
+  subscriptionStatus?: "trialing" | "active" | "past_due" | "canceled" | "none";
 }
 
 export function AuthScreen({ googleAuth = false }: { onAuthed?: (user: SaasUser) => void; googleAuth?: boolean }) {
   const [error, setError] = useState<string | null>(null);
+  const billingReturn = window.location.pathname === "/billing/success";
+  const googleHref = `/api/auth/google?next=${encodeURIComponent(
+    `${window.location.pathname}${window.location.search}`,
+  )}`;
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -28,13 +34,15 @@ export function AuthScreen({ googleAuth = false }: { onAuthed?: (user: SaasUser)
           <MausAvatar color="blue" state="happy" size={64} />
           <h1 className="mt-4 text-[22px] font-semibold text-ink">Aishe</h1>
           <p className="mt-1.5 text-center text-[14px] text-ink-secondary">
-            Your AI bot team in the cloud — sign in with Google to continue.
+            {billingReturn
+              ? "Sign in with Google to finish activating Aishe Plus."
+              : "Your AI bot team in the cloud — sign in with Google to continue."}
           </p>
         </div>
 
         <div className="mt-6 flex flex-col gap-3">
           <a
-            href="/api/auth/google"
+            href={googleHref}
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent py-2.5 text-[15px] font-medium text-white hover:brightness-110"
           >
             <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden fill="currentColor">

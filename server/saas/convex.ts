@@ -33,6 +33,8 @@ export type ConvexUserRow = {
   subscriptionEndsAt: number | null;
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;
+  polarCustomerId?: string;
+  polarSubscriptionId?: string;
   googleId?: string;
   onboardingCompletedAt?: number | null;
 };
@@ -103,6 +105,8 @@ export async function convexPatchSubscription(
     subscriptionEndsAt: number | null;
     stripeCustomerId: string;
     stripeSubscriptionId: string;
+    polarCustomerId: string;
+    polarSubscriptionId: string;
   }>,
 ): Promise<ConvexUserRow | null> {
   const client = convexClient();

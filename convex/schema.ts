@@ -37,6 +37,8 @@ export default defineSchema({
     subscriptionEndsAt: v.union(v.number(), v.null()),
     stripeCustomerId: v.optional(v.string()),
     stripeSubscriptionId: v.optional(v.string()),
+    polarCustomerId: v.optional(v.string()),
+    polarSubscriptionId: v.optional(v.string()),
     googleId: v.optional(v.string()),
     /** null = first-run tour pending; number = completed at (ms); omit = legacy user */
     onboardingCompletedAt: v.optional(v.union(v.number(), v.null())),

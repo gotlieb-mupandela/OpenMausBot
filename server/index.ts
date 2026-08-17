@@ -20,6 +20,7 @@ import { mentionedBots, type Message } from "./store.ts";
 import { SAAS_MODE, SAAS_HOST } from "./saas/mode.ts";
 import * as auth from "./saas/auth.ts";
 import * as google from "./saas/google.ts";
+import * as polar from "./saas/polar.ts";
 import { TenantStores } from "./saas/tenants.ts";
 import * as routines from "./saas/routines.ts";
 
@@ -671,6 +672,23 @@ function readBody(req: IncomingMessage): Promise<any> {
   });
 }
 
+function readRawBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (c: Buffer) => {
+      size += c.length;
+      if (size > 1_000_000) {
+        reject(new Error("body too large"));
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
   const path = url.pathname;
@@ -683,7 +701,7 @@ const server = createServer(async (req, res) => {
       }
       if (method === "GET" && path === "/api/auth/google") {
         try {
-          google.startGoogleLogin(res);
+          google.startGoogleLogin(res, url.searchParams.get("next"));
         } catch (e) {
           const status = (e as { status?: number })?.status ?? 500;
           return json(res, status, { error: e instanceof Error ? e.message : String(e) });
@@ -695,9 +713,10 @@ const server = createServer(async (req, res) => {
           const profile = await google.googleProfileFromCallback(req);
           const user = await auth.findOrCreateFromGoogle(profile);
           await tenants.touch(user.id);
+          const next = google.consumeOauthNext(req, res);
           google.clearOauthCookie(res);
           auth.issueSession(res, user.id);
-          res.writeHead(302, { location: `${google.publicOrigin()}/` });
+          res.writeHead(302, { location: `${google.publicOrigin()}${next}` });
           return res.end();
         } catch (e) {
           google.clearOauthCookie(res);
@@ -732,6 +751,21 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { mode: "saas", googleAuth: google.googleConfigured() });
     }
 
+    if (SAAS_MODE && method === "POST" && path === "/api/billing/polar/webhook") {
+      try {
+        await polar.handleWebhook(req.headers, await readRawBody(req));
+        res.writeHead(202);
+        return res.end();
+      } catch (e) {
+        const status = (e as { status?: number })?.status ?? 500;
+        if (status === 403) {
+          res.writeHead(403);
+          return res.end();
+        }
+        return json(res, status, { error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+
     // ── resolve tenant store ───────────────────────────────────────────
     let store = desktopStore;
     let saasUser: auth.SaasUser | null = null;
@@ -743,6 +777,17 @@ const server = createServer(async (req, res) => {
       sseUserId = saasUser.id;
     }
     const broadcastUser = (payload: unknown) => broadcastTo(sseUserId, payload);
+
+    if (SAAS_MODE && saasUser && method === "GET" && path === "/api/billing/checkout") {
+      res.writeHead(302, {
+        location: polar.checkoutUrl({
+          email: saasUser.email,
+          name: saasUser.name,
+          referenceId: saasUser.id,
+        }),
+      });
+      return res.end();
+    }
 
     // ── internal peer-agent comms (localhost + shared token only) ──────
     // The agents-proxy (spawned inside a bot's agent process) calls these to

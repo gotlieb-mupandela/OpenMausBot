@@ -60,7 +60,24 @@ function appendCookie(res: ServerResponse, value: string) {
   res.setHeader("set-cookie", [...list, value]);
 }
 
-export function startGoogleLogin(res: ServerResponse) {
+const NEXT_COOKIE = "omb_oauth_next";
+
+/** Same-origin path only — blocks open redirects after Google login. */
+export function safeNextPath(raw: string | null | undefined): string {
+  if (!raw) return "/";
+  let next = raw.trim();
+  try {
+    next = decodeURIComponent(next);
+  } catch {
+    return "/";
+  }
+  if (!next.startsWith("/") || next.startsWith("//") || next.includes("://") || /[\r\n\\]/.test(next)) {
+    return "/";
+  }
+  return next;
+}
+
+export function startGoogleLogin(res: ServerResponse, nextPath?: string | null) {
   if (!googleConfigured()) {
     throw Object.assign(new Error("Google login is not configured"), { status: 501 });
   }
@@ -69,6 +86,11 @@ export function startGoogleLogin(res: ServerResponse) {
   appendCookie(
     res,
     `${STATE_COOKIE}=${encodeURIComponent(state)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`,
+  );
+  const next = safeNextPath(nextPath);
+  appendCookie(
+    res,
+    `${NEXT_COOKIE}=${encodeURIComponent(next)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`,
   );
   const url = new URL(AUTH_URL);
   url.searchParams.set("client_id", process.env.GOOGLE_CLIENT_ID!.trim());
@@ -83,6 +105,13 @@ export function startGoogleLogin(res: ServerResponse) {
 
 export function clearOauthCookie(res: ServerResponse) {
   appendCookie(res, `${STATE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+  appendCookie(res, `${NEXT_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+}
+
+export function consumeOauthNext(req: IncomingMessage, res: ServerResponse): string {
+  const next = safeNextPath(parseCookies(req)[NEXT_COOKIE]);
+  appendCookie(res, `${NEXT_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+  return next;
 }
 
 export async function googleProfileFromCallback(
