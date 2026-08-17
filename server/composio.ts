@@ -72,6 +72,19 @@ function entityUserId(userId?: string): string {
   return userId?.trim() || "default";
 }
 
+function accountUserId(account: any): string {
+  return String(
+    account?.user_id ?? account?.userId ?? account?.entity_id ?? account?.entityId ?? "",
+  ).trim();
+}
+
+/** SaaS tenants only see their own OAuth accounts. Desktop may use unscoped/"default". */
+function accountBelongsTo(account: any, entity: string, scoped: boolean): boolean {
+  const uid = accountUserId(account);
+  if (scoped) return uid === entity;
+  return !uid || uid === "default" || uid === entity;
+}
+
 async function backendJson(
   apiKey: string,
   method: string,
@@ -127,28 +140,26 @@ async function listConnectedAccounts(
   slugs: string[],
   userId?: string,
 ): Promise<any[]> {
+  const scoped = Boolean(userId?.trim());
   const entity = entityUserId(userId);
   const params = new URLSearchParams();
   params.set("limit", "100");
   params.set("user_ids", entity);
+  params.set("user_id", entity);
   for (const slug of slugs) params.append("toolkit_slugs", slug);
   const json = await backendJson(apiKey, "GET", `/connected_accounts?${params}`);
-  let items: any[] = json?.items ?? json?.data ?? [];
-  // OAuth sometimes stores a different user_id than we filter on — fall back
-  // to toolkit-only list and keep accounts for this entity (or any ACTIVE).
-  if (!items.length && slugs.length) {
+  let items: any[] = (json?.items ?? json?.data ?? []).filter((a: any) =>
+    accountBelongsTo(a, entity, scoped),
+  );
+  // Composio may ignore user_ids on some plans — list then keep only this tenant.
+  // Never fall back to other users' ACTIVE accounts.
+  if (!items.length) {
     const loose = new URLSearchParams();
     loose.set("limit", "100");
     for (const slug of slugs) loose.append("toolkit_slugs", slug);
     const all = await backendJson(apiKey, "GET", `/connected_accounts?${loose}`);
     const pool: any[] = all?.items ?? all?.data ?? [];
-    items = pool.filter((a) => {
-      const uid = String(a?.user_id ?? a?.userId ?? "");
-      return !uid || uid === entity || uid === "default";
-    });
-    if (!items.length) {
-      items = pool.filter((a) => /^active$/i.test(a?.status ?? "") && !a?.is_disabled);
-    }
+    items = pool.filter((a) => accountBelongsTo(a, entity, scoped));
   }
   return items;
 }

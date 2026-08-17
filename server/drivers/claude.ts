@@ -246,10 +246,16 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       const mcpServers: Record<string, unknown> = {};
       const allowed: string[] = [];
       if (turn.integrations?.composio?.key) {
+        const composioUserId = turn.integrations.composio.userId?.trim();
         mcpServers.composio = {
           type: "http",
           url: turn.integrations.composio.url || "https://connect.composio.dev/mcp",
-          headers: { "x-consumer-api-key": turn.integrations.composio.key },
+          headers: {
+            "x-consumer-api-key": turn.integrations.composio.key,
+            ...(composioUserId
+              ? { "x-entity-id": composioUserId, "x-user-id": composioUserId }
+              : {}),
+          },
         };
         allowed.push("mcp__composio");
       }
