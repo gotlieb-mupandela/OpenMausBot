@@ -63,7 +63,7 @@ function Shell({
         {state.settingsOpen && bot && <SettingsPanel bot={bot} />}
         {state.computerOpen && bot && <ComputerPanel bot={bot} saasMode={saasMode} />}
         {state.appSettingsOpen && <AppSettingsPanel saasUser={saasUser} onSaasUser={onSaasUser} />}
-        {state.pluginsOpen && <PluginsPanel />}
+        {state.pluginsOpen && <PluginsPanel saasMode={saasMode} />}
       </div>
       {state.newBotWizardOpen && (
         <NewBotWizard onClose={() => dispatch({ type: "toggleNewBotWizard", open: false })} />

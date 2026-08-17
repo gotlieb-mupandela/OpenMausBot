@@ -180,29 +180,6 @@ export function AppSettingsPanel({
                 Log out
               </button>
             </div>
-            <div className="mt-4 rounded-xl bg-card p-4">
-              <div className="text-[15px] font-medium text-ink">Plugins</div>
-              <div className="mt-0.5 text-[13px] text-ink-secondary">
-                Paste your Composio project API key (
-                <code className="rounded bg-raised px-1">ak_…</code>) from Platform → project → Settings →
-                API Keys — enough to Add apps. Optional: Connect key (
-                <code className="rounded bg-raised px-1">ck_…</code>) from sidebar{" "}
-                <span className="font-medium">Install</span> (aka AI Clients) → your client → Your API Key.
-                Saving applies immediately (no restart).
-              </div>
-              <div className="mt-4 flex flex-col gap-4">
-                <ApiKeyRow
-                  section="composioApi"
-                  label="Composio API key (Add apps + catalog)"
-                  placeholder="ak_… from Platform → Settings → API Keys"
-                />
-                <ApiKeyRow
-                  section="composio"
-                  label="Composio Connect key (optional, agent MCP tools)"
-                  placeholder="ck_… from Install / AI Clients"
-                />
-              </div>
-            </div>
           </>
         ) : (
           <div className="mt-4 rounded-xl bg-card p-4">

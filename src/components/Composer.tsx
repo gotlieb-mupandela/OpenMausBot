@@ -5,6 +5,7 @@ import { useStore, type Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { MausAvatar } from "./Avatar";
 import { normalizeState } from "@/lib/mascot";
+import { browserSpeechSupported, startBrowserSpeech } from "@/lib/web-speech";
 
 /** The active @mention query at the caret: the text between an `@` that
  * starts a word and the caret. null = no mention being typed. */
@@ -158,44 +159,72 @@ export function Composer({ bot, canChat = true }: { bot: Bot; canChat?: boolean 
     setText("");
   };
 
-  // native dictation: partials stream into the input while the Swift
-  // helper runs; the final transcript stays in the box, ready to edit/send
+  // Dictation: Electron uses the native Swift helper; the browser uses
+  // the Web Speech API (Chrome / Edge). Partials stream into the input;
+  // the final transcript stays in the box, ready to edit/send.
   useEffect(() => {
     if (!recording) return;
-    const bridge = window.ogb;
-    if (!bridge) {
-      setRecording(false);
-      return;
-    }
     setSpeechError(null);
-    const offTranscript = bridge.onSpeechTranscript((line) => {
+
+    const applyLine = (line: { text?: string; error?: string }) => {
+      if (line.error === "network") {
+        setSpeechError("Voice input needs a network connection. Check it and try again.");
+        return;
+      }
+      if (line.error === "not-allowed" || line.error === "service-not-allowed") {
+        setSpeechError("Microphone was blocked. Allow it in the browser and try again.");
+        return;
+      }
       if (typeof line.text === "string") {
         const base = baseText.current;
         setText(base ? `${base} ${line.text}` : line.text);
       }
-    });
-    const offEnd = bridge.onSpeechEnd(({ code }) => {
-      setRecording(false);
-      if (code === 1) {
-        setSpeechError(
-          "Dictation needs Microphone + Speech Recognition access — System Settings → Privacy & Security.",
-        );
-      }
-    });
-    void bridge.speechStart();
-    return () => {
-      offTranscript();
-      offEnd();
-      void bridge.speechStop();
     };
+
+    const bridge = window.ogb;
+    if (bridge) {
+      const offTranscript = bridge.onSpeechTranscript(applyLine);
+      const offEnd = bridge.onSpeechEnd(({ code }) => {
+        setRecording(false);
+        if (code === 1) {
+          setSpeechError(
+            "Dictation needs Microphone + Speech Recognition access — System Settings → Privacy & Security.",
+          );
+        }
+      });
+      void bridge.speechStart();
+      return () => {
+        offTranscript();
+        offEnd();
+        void bridge.speechStop();
+      };
+    }
+
+    if (!browserSpeechSupported()) {
+      setRecording(false);
+      setSpeechError("Voice input isn't supported in this browser. Try Chrome or Edge.");
+      return;
+    }
+
+    const stop = startBrowserSpeech({
+      onTranscript: applyLine,
+      onEnd: ({ code }) => {
+        setRecording(false);
+        if (code === 1) {
+          setSpeechError("Microphone was blocked. Allow it in the browser and try again.");
+        }
+      },
+    });
+    return () => stop();
   }, [recording]);
 
   const toggleMic = () => {
-    if (!window.ogb) {
-      setSpeechError("Voice input needs the desktop app — run pnpm dev:desktop.");
+    if (!window.ogb && !browserSpeechSupported()) {
+      setSpeechError("Voice input isn't supported in this browser. Try Chrome or Edge.");
       return;
     }
     baseText.current = text.trim();
+    setSpeechError(null);
     setRecording((r) => !r);
   };
 

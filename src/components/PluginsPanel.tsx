@@ -38,7 +38,7 @@ function ServiceIcon({ card }: { card: ToolkitCard }) {
   );
 }
 
-export function PluginsPanel() {
+export function PluginsPanel({ saasMode = false }: { saasMode?: boolean }) {
   const { dispatch } = useStore();
   const [cards, setCards] = useState<ToolkitCard[] | null>(null);
   const [source, setSource] = useState<"api" | "curated">("curated");
@@ -227,19 +227,25 @@ export function PluginsPanel() {
 
         {!configured && (
           <div className="mt-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[13px] text-warning">
-            Paste a Composio project API key (
-            <code className="rounded bg-raised/60 px-1">ak_…</code>) in App Settings to Add apps — from
-            Platform → project → Settings → API Keys.{" "}
-            <button
-              className="underline"
-              onClick={() => {
-                dispatch({ type: "togglePlugins", open: false });
-                dispatch({ type: "toggleAppSettings", open: true });
-              }}
-            >
-              Open App Settings
-            </button>
-            . Saving applies immediately — no restart.
+            {saasMode ? (
+              <>Plugins aren&apos;t enabled yet — the host needs to set COMPOSIO_API_KEY on the server.</>
+            ) : (
+              <>
+                Paste a Composio project API key (
+                <code className="rounded bg-raised/60 px-1">ak_…</code>) in App Settings to Add apps — from
+                Platform → project → Settings → API Keys.{" "}
+                <button
+                  className="underline"
+                  onClick={() => {
+                    dispatch({ type: "togglePlugins", open: false });
+                    dispatch({ type: "toggleAppSettings", open: true });
+                  }}
+                >
+                  Open App Settings
+                </button>
+                . Saving applies immediately — no restart.
+              </>
+            )}
           </div>
         )}
 

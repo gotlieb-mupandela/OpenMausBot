@@ -16,10 +16,10 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 function friendlyAuthError(raw: string): string {
   const msg = raw.toLowerCase();
+  if (msg.includes("invalid email or password")) return "Incorrect email or password.";
   if (msg.includes("invalid email")) return "Enter a valid email address (like you@example.com).";
   if (msg.includes("password must be")) return "Password must be at least 8 characters.";
   if (msg.includes("already registered")) return "That email is already registered. Try logging in.";
-  if (msg.includes("invalid email or password")) return "Incorrect email or password.";
   return raw;
 }
 
