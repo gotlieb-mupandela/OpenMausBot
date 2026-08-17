@@ -2,6 +2,7 @@ import { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api.js";
 import type { Id } from "../../convex/_generated/dataModel.js";
 import type { BotRecord, Message, StoreMirror } from "../store.ts";
+import { MAX_MESSAGES_PER_THREAD, trimThreadMessages } from "./capacity.ts";
 
 export function convexConfigured(): boolean {
   return Boolean(process.env.CONVEX_URL?.trim() && process.env.OMB_HARNESS_SECRET?.trim());
@@ -197,8 +198,9 @@ export async function hydrateFromConvex(
       secret: s,
       userId: uid,
       threadId: bot.threadId,
+      limit: MAX_MESSAGES_PER_THREAD,
     });
-    messages.set(bot.threadId, msgs.map(toMessage));
+    messages.set(bot.threadId, trimThreadMessages(msgs.map(toMessage)));
   }
   return { bots, messages };
 }

@@ -22,6 +22,7 @@ export const listForThread = query({
     secret: v.string(),
     userId: v.id("users"),
     threadId: v.string(),
+    limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     assertHarness(args.secret);
@@ -31,7 +32,9 @@ export const listForThread = query({
         q.eq("userId", args.userId).eq("threadId", args.threadId),
       )
       .collect();
-    return rows.sort((a, b) => a.at - b.at);
+    const sorted = rows.sort((a, b) => a.at - b.at);
+    const cap = args.limit && args.limit > 0 ? Math.floor(args.limit) : sorted.length;
+    return sorted.slice(-cap);
   },
 });
 

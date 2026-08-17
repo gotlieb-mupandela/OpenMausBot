@@ -157,6 +157,9 @@ export async function provisionBox(cfg: AppConfig, owner: BoxOwner, displayName:
         createRes?.status === 429 ||
         /concurrent|limit_reached|rate_limited|activeBoxes/i.test(`${code} ${msg}`);
       if (attempt === 0 && concurrent) {
+        // SaaS: never stop other users' VMs to steal a slot.
+        const saas = process.env.OMB_SAAS === "1" || process.env.OMB_SAAS === "true";
+        if (saas) break;
         await freeConcurrentSlots(cfg);
         continue;
       }

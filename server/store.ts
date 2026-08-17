@@ -7,6 +7,7 @@ import { join } from "node:path";
 
 import { DATA_DIR } from "./config.ts";
 import { newId, type ModelSelection, type ThreadId } from "./contracts.ts";
+import { MAX_MESSAGES_PER_THREAD } from "./saas/capacity.ts";
 
 export type MausColor =
   | "green"
@@ -203,6 +204,9 @@ export class Store {
     const full: Message = { id: newId(), at: Date.now(), ...message };
     const list = this.messagesFor(threadId);
     list.push(full);
+    if (this.memoryOnly && list.length > MAX_MESSAGES_PER_THREAD) {
+      list.splice(0, list.length - MAX_MESSAGES_PER_THREAD);
+    }
     if (!this.memoryOnly) {
       writeFileSync(this.messagesFile(threadId), JSON.stringify(list, null, 2));
     }

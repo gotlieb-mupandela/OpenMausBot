@@ -18,6 +18,7 @@ import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { mentionedBots, type Message } from "./store.ts";
 import { SAAS_MODE, SAAS_HOST } from "./saas/mode.ts";
+import { MAX_MESSAGES_PER_THREAD, trimThreadMessages, turnGate } from "./saas/capacity.ts";
 import * as auth from "./saas/auth.ts";
 import * as google from "./saas/google.ts";
 import * as polar from "./saas/polar.ts";
@@ -248,6 +249,7 @@ bus.subscribe((event: RuntimeEvent) => {
       const frame = stopScreenPoller(bot.id);
       if (frame) pushMessage({ role: "bot", kind: "screen", png: frame.png, mime: frame.mime });
       store.patchBot(bot.id, { busy: false, unread: true });
+      turnGate.release(bot.id, userId);
       broadcast({ kind: "bot", bot: store.bot(bot.id) });
       break;
     }
@@ -306,6 +308,13 @@ function stopScreenPoller(botId: string): Frame | null {
   return entry.last;
 }
 
+tenants.setHooks({
+  isPinned: (userId) => (sseClients.get(userId)?.size ?? 0) > 0,
+  onEvict: (_userId, store) => {
+    for (const b of store.bots) stopScreenPoller(b.id);
+  },
+});
+
 // Local computer-use contract written by Electron main on startup
 // (~/Library/Application Support/Aishe/cua-connection.json). Read
 // fresh each turn — Electron may restart or permissions may change.
@@ -348,6 +357,8 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
       { status: 409 },
     );
   }
+  const slot = turnGate.tryAcquire(userId, bot.id);
+  if (!slot.ok) throw Object.assign(new Error(slot.error), { status: slot.status });
 
   const userMessage = store.appendMessage(bot.threadId, { role: "user", kind: "text", text });
   broadcast({ kind: "message", threadId: bot.threadId, message: userMessage });
@@ -623,6 +634,7 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
       });
       broadcast({ kind: "message", threadId: bot.threadId, message: failure });
       store.patchBot(bot.id, { busy: false });
+      turnGate.release(bot.id, userId);
       broadcast({ kind: "bot", bot: store.bot(bot.id) });
     } finally {
       if (turnDispatchAborts.get(bot.id) === dispatchAbort) turnDispatchAborts.delete(bot.id);
@@ -909,7 +921,10 @@ const server = createServer(async (req, res) => {
     // ── bots ──
     if (method === "GET" && path === "/api/bots") {
       return json(res, 200, {
-        bots: store.bots.map((b) => ({ ...b, messages: store.messagesFor(b.threadId) })),
+        bots: store.bots.map((b) => ({
+          ...b,
+          messages: trimThreadMessages(store.messagesFor(b.threadId), MAX_MESSAGES_PER_THREAD),
+        })),
       });
     }
     if (method === "POST" && path === "/api/bots") {
@@ -1076,6 +1091,7 @@ const server = createServer(async (req, res) => {
       await instance?.adapter.interruptTurn(bot.threadId);
       // Clear busy even if sendTurn never started (stuck in Box/Composio prep).
       store.patchBot(bot.id, { busy: false });
+      turnGate.release(bot.id, saasUser?.id ?? sseUserId);
       broadcastUser({ kind: "bot", bot: store.bot(bot.id) });
       return json(res, 200, { ok: true });
     }
