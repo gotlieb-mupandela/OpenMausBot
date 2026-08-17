@@ -145,7 +145,7 @@ export function ChatView({ bot, canChat = true }: { bot: Bot; canChat?: boolean 
   const liveScreen = state.screens[bot.id];
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
 
-  const feed = useMemo(() => buildFeed(bot.messages, bot.busy), [bot.messages, bot.busy]);
+  const feed = useMemo(() => buildFeed(bot.messages, bot.busy ?? false), [bot.messages, bot.busy]);
 
   // Scroll pinning: follow the bottom while the user hasn't scrolled away.
   // Follow breaks ONLY on an upward user gesture (wheel/touch), never on
