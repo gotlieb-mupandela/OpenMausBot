@@ -45,6 +45,8 @@ type Phase =
 
 type Routine = {
   id: string;
+  botId: string;
+  botName?: string;
   name: string;
   instruction: string;
   kind: "daily" | "interval";
@@ -137,10 +139,13 @@ function RoutinesSection({ botId }: { botId: string }) {
     }
   };
 
-  const patch = async (id: string, body: Record<string, unknown>) => {
-    setBusyId(id);
+  const patch = async (row: Routine, body: Record<string, unknown>) => {
+    setBusyId(row.id);
     try {
-      await api(`/api/bots/${botId}/routines/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+      await api(`/api/bots/${row.botId || botId}/routines/${row.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -149,10 +154,10 @@ function RoutinesSection({ botId }: { botId: string }) {
     }
   };
 
-  const remove = async (id: string) => {
-    setBusyId(id);
+  const remove = async (row: Routine) => {
+    setBusyId(row.id);
     try {
-      await api(`/api/bots/${botId}/routines/${id}`, { method: "DELETE" });
+      await api(`/api/bots/${row.botId || botId}/routines/${row.id}`, { method: "DELETE" });
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -161,10 +166,10 @@ function RoutinesSection({ botId }: { botId: string }) {
     }
   };
 
-  const runNow = async (id: string) => {
-    setBusyId(id);
+  const runNow = async (row: Routine) => {
+    setBusyId(row.id);
     try {
-      await api(`/api/bots/${botId}/routines/${id}/run`, { method: "POST" });
+      await api(`/api/bots/${row.botId || botId}/routines/${row.id}/run`, { method: "POST" });
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -183,7 +188,8 @@ function RoutinesSection({ botId }: { botId: string }) {
         Routines
       </div>
       <div className="mt-1 text-[13px] leading-snug text-ink-secondary">
-        Recurring tasks this bot runs on a schedule — same as sending the instruction in chat.
+        Recurring tasks this bot runs on a schedule — same as sending the instruction in chat. They stay
+        saved even if you switch bots or refresh.
       </div>
       {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
 
@@ -202,7 +208,10 @@ function RoutinesSection({ botId }: { botId: string }) {
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="truncate text-[13px] font-medium text-ink">{r.name}</div>
-                  <div className="mt-0.5 text-[12px] text-ink-secondary">{scheduleLabel(r)}</div>
+                  <div className="mt-0.5 text-[12px] text-ink-secondary">
+                    {scheduleLabel(r)}
+                    {r.botId !== botId ? ` · ${r.botName ?? "another bot"}` : ""}
+                  </div>
                   <div className="mt-0.5 text-[11px] text-ink-secondary">
                     {r.enabled && r.nextRunAt < Date.now() - 5_000 ? (
                       <span className="text-warning">Overdue · </span>
@@ -218,7 +227,7 @@ function RoutinesSection({ botId }: { botId: string }) {
                     type="checkbox"
                     checked={r.enabled}
                     disabled={busyId === r.id}
-                    onChange={(e) => void patch(r.id, { enabled: e.target.checked })}
+                    onChange={(e) => void patch(r, { enabled: e.target.checked })}
                   />
                   On
                 </label>
@@ -228,7 +237,7 @@ function RoutinesSection({ botId }: { botId: string }) {
                 <button
                   type="button"
                   disabled={busyId === r.id}
-                  onClick={() => void runNow(r.id)}
+                  onClick={() => void runNow(r)}
                   className="flex items-center gap-1 rounded-md bg-raised px-2 py-1 text-[12px] text-ink hover:bg-raised-hover disabled:opacity-40"
                 >
                   <Play size={12} /> Run now
@@ -236,7 +245,7 @@ function RoutinesSection({ botId }: { botId: string }) {
                 <button
                   type="button"
                   disabled={busyId === r.id}
-                  onClick={() => void remove(r.id)}
+                  onClick={() => void remove(r)}
                   className="flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-danger hover:bg-danger/10 disabled:opacity-40"
                 >
                   <Trash2 size={12} /> Delete

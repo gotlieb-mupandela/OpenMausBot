@@ -976,7 +976,13 @@ const server = createServer(async (req, res) => {
       const bot = store.bot(m[1]);
       if (!bot) return json(res, 404, { error: "no such bot" });
       const uid = saasUser?.id ?? "__desktop__";
-      return json(res, 200, { routines: await routines.listForBot(uid, bot.id) });
+      const rows = await routines.listForUser(uid);
+      return json(res, 200, {
+        routines: rows.map((r) => ({
+          ...r,
+          botName: store.bot(r.botId)?.name ?? "a bot",
+        })),
+      });
     }
     if (m && method === "POST") {
       const bot = store.bot(m[1]);

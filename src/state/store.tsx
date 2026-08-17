@@ -113,7 +113,7 @@ interface AppState {
 }
 
 type Action =
-  | { type: "hydrate"; bots: Bot[] }
+  | { type: "hydrate"; bots: Bot[]; preferredId?: string | null }
   | { type: "instances"; instances: InstanceInfo[] }
   | { type: "configStatus"; config: ConfigStatus }
   | { type: "select"; id: string }
@@ -199,10 +199,13 @@ function reducer(state: AppState, action: Action): AppState {
           busy: Boolean(serverBot.busy || prev.busy),
         };
       });
+      const preferred = action.preferredId;
       const selectedId =
         bots.some((b) => b.id === state.selectedId) && state.selectedId
           ? state.selectedId
-          : (bots[0]?.id ?? "");
+          : preferred && bots.some((b) => b.id === preferred)
+            ? preferred
+            : (bots[0]?.id ?? "");
       return {
         ...state,
         bots: bots.map((b) => (b.id === selectedId && b.unread ? { ...b, unread: false } : b)),
@@ -454,6 +457,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const stateRef = useRef(state);
   stateRef.current = state;
 
+  useEffect(() => {
+    if (!state.selectedId) return;
+    try {
+      localStorage.setItem("aishe.selectedBot", state.selectedId);
+    } catch {
+      /* ignore quota / private mode */
+    }
+  }, [state.selectedId]);
+
   // debounced PATCH per bot for text-field edits (name/title/description)
   const patchTimers = useRef(new Map<string, { timer: ReturnType<typeof setTimeout>; patch: Record<string, unknown> }>());
 
@@ -634,8 +646,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     let backoffMs = 800;
 
     const loadAll = () => {
+      let preferredId: string | null = null;
+      try {
+        preferredId = localStorage.getItem("aishe.selectedBot");
+      } catch {
+        preferredId = null;
+      }
       api("/api/bots")
-        .then(({ bots }) => alive && rawDispatch({ type: "hydrate", bots }))
+        .then(({ bots }) => alive && rawDispatch({ type: "hydrate", bots, preferredId }))
         .catch(() => {});
       api("/api/instances")
         .then(({ instances }) => alive && rawDispatch({ type: "instances", instances }))

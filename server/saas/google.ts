@@ -3,7 +3,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { sessionSecret } from "./mode.ts";
+import { cookieSecureAttr, sessionSecret } from "./mode.ts";
 
 const STATE_COOKIE = "omb_oauth";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -85,12 +85,12 @@ export function startGoogleLogin(res: ServerResponse, nextPath?: string | null) 
   const state = signState(nonce);
   appendCookie(
     res,
-    `${STATE_COOKIE}=${encodeURIComponent(state)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`,
+    `${STATE_COOKIE}=${encodeURIComponent(state)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600${cookieSecureAttr()}`,
   );
   const next = safeNextPath(nextPath);
   appendCookie(
     res,
-    `${NEXT_COOKIE}=${encodeURIComponent(next)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`,
+    `${NEXT_COOKIE}=${encodeURIComponent(next)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600${cookieSecureAttr()}`,
   );
   const url = new URL(AUTH_URL);
   url.searchParams.set("client_id", process.env.GOOGLE_CLIENT_ID!.trim());
@@ -98,7 +98,6 @@ export function startGoogleLogin(res: ServerResponse, nextPath?: string | null) 
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", "openid email profile");
   url.searchParams.set("state", state);
-  url.searchParams.set("prompt", "select_account");
   res.writeHead(302, { location: url.toString() });
   res.end();
 }

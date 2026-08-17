@@ -14,11 +14,21 @@ export const listForBot = query({
   args: { secret: v.string(), userId: v.id("users"), botId: v.string() },
   handler: async (ctx, args) => {
     assertHarness(args.secret);
-    const rows = await ctx.db
-      .query("routines")
-      .withIndex("by_user_bot", (q) => q.eq("userId", args.userId).eq("botId", args.botId))
-      .collect();
-    return rows.sort((a, b) => a.createdAt - b.createdAt);
+    const rows = await ctx.db.query("routines").collect();
+    return rows
+      .filter((r) => r.userId === args.userId && r.botId === args.botId)
+      .sort((a, b) => a.createdAt - b.createdAt);
+  },
+});
+
+export const listForUser = query({
+  args: { secret: v.string(), userId: v.id("users") },
+  handler: async (ctx, args) => {
+    assertHarness(args.secret);
+    const rows = await ctx.db.query("routines").collect();
+    return rows
+      .filter((r) => r.userId === args.userId)
+      .sort((a, b) => a.createdAt - b.createdAt);
   },
 });
 

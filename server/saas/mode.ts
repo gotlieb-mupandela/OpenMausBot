@@ -3,6 +3,13 @@ export const SAAS_MODE = process.env.OMB_SAAS === "1" || process.env.OMB_SAAS ==
 
 export const SAAS_HOST = process.env.OMB_HOST || (SAAS_MODE ? "0.0.0.0" : "127.0.0.1");
 
+/** `; Secure` on HTTPS so the session cookie survives refresh on Render. */
+export function cookieSecureAttr(): string {
+  if (process.env.OMB_COOKIE_SECURE === "0") return "";
+  if (process.env.OMB_COOKIE_SECURE === "1") return "; Secure";
+  return (process.env.OMB_PUBLIC_URL ?? "").startsWith("https:") ? "; Secure" : "";
+}
+
 /** Session / password signing secret. Required in SaaS (generate one for prod). */
 export function sessionSecret(): string {
   const s = process.env.OMB_SESSION_SECRET || process.env.SESSION_SECRET;

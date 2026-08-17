@@ -7,7 +7,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { DATA_DIR } from "../config.ts";
 import { newId } from "../contracts.ts";
-import { sessionSecret } from "./mode.ts";
+import { cookieSecureAttr, sessionSecret } from "./mode.ts";
 import * as cx from "./convex.ts";
 
 export type SubscriptionStatus = "trialing" | "active" | "past_due" | "canceled" | "none";
@@ -332,8 +332,7 @@ export async function completeOnboarding(userId: string): Promise<SaasUser | nul
 
 export function issueSession(res: ServerResponse, userId: string) {
   const token = sign({ uid: userId, exp: Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000 });
-  const secure = process.env.OMB_COOKIE_SECURE === "1" ? "; Secure" : "";
-  const cookie = `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${secure}`;
+  const cookie = `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${cookieSecureAttr()}`;
   const prev = res.getHeader("set-cookie");
   if (!prev) {
     res.setHeader("set-cookie", cookie);

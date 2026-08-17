@@ -223,15 +223,19 @@ function useConvex(userId: string): boolean {
 }
 
 export async function listForBot(userId: string, botId: string): Promise<Routine[]> {
+  const rows = await listForUser(userId);
+  return rows.filter((r) => r.botId === botId);
+}
+
+export async function listForUser(userId: string): Promise<Routine[]> {
   if (useConvex(userId)) {
-    const rows = await cx.convexClient().query(api.routines.listForBot, {
+    const rows = await cx.convexClient().query(api.routines.listForUser, {
       secret: process.env.OMB_HARNESS_SECRET!,
       userId: userId as Id<"users">,
-      botId,
     });
     return rows.map(fromConvex);
   }
-  return loadLocal(userId).filter((r) => r.botId === botId);
+  return loadLocal(userId);
 }
 
 export async function getRoutine(userId: string, routineId: string): Promise<Routine | null> {
