@@ -146,14 +146,16 @@ function TooltipCard({
 }) {
   const centered = !rect;
   const card = (
-    <div className="w-full max-w-[380px] rounded-2xl border border-hairline/40 bg-panel p-5 shadow-2xl shadow-black/50">
-      <div className="flex items-center gap-2.5">
-        {step.icon}
-        <h2 className="text-[17px] font-semibold text-ink">{step.title}</h2>
+    <div className="w-full max-w-[380px] rounded-2xl border border-white/10 bg-[#141414] p-5 shadow-2xl shadow-black/60">
+      <div className="flex items-start gap-2.5">
+        <span className="mt-0.5 shrink-0">{step.icon}</span>
+        <div className="min-w-0">
+          <h2 className="text-[17px] font-semibold text-white">{step.title}</h2>
+          <p className="mt-2 text-[14px] leading-relaxed text-white/70">{step.body}</p>
+        </div>
       </div>
-      <p className="mt-2.5 text-[14px] leading-relaxed text-ink-secondary">{step.body}</p>
       <div className="mt-4 flex items-center justify-between gap-3">
-        <span className="text-[12px] text-ink-secondary">
+        <span className="text-[12px] text-white/50">
           {index + 1} / {total}
         </span>
         <div className="flex items-center gap-2">
@@ -161,7 +163,7 @@ function TooltipCard({
             <button
               onClick={onSkip}
               disabled={busy}
-              className="rounded-lg px-3 py-1.5 text-[13px] text-ink-secondary hover:text-ink disabled:opacity-40"
+              className="rounded-lg px-3 py-1.5 text-[13px] text-white/60 hover:text-white disabled:opacity-40"
             >
               Skip tour
             </button>
@@ -186,18 +188,19 @@ function TooltipCard({
     );
   }
 
-  const below = rect.top + rect.height + 16 + 180 < window.innerHeight;
-  const top = below ? rect.top + rect.height + 16 : rect.top - 16;
+  const below = rect.top + rect.height + 16 + 200 < window.innerHeight;
   const left = Math.min(Math.max(rect.left, 12), window.innerWidth - 392);
+  const topAbove = Math.max(12, rect.top - 16);
+  const topBelow = rect.top + rect.height + 16;
 
   return (
     <div
       className="fixed z-[101] px-3"
       style={{
-        top: below ? top : undefined,
-        bottom: below ? undefined : window.innerHeight - top,
+        top: below ? topBelow : topAbove,
         left,
         width: Math.min(380, window.innerWidth - 24),
+        transform: below ? undefined : "translateY(-100%)",
       }}
     >
       {card}
