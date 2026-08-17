@@ -23,6 +23,7 @@ export interface SaasUser {
   subscriptionEndsAt: number | null;
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;
+  googleId?: string;
 }
 
 export interface PublicUser {
@@ -121,6 +122,7 @@ function fromConvexRow(row: cx.ConvexUserRow): SaasUser {
     subscriptionEndsAt: row.subscriptionEndsAt,
     stripeCustomerId: row.stripeCustomerId,
     stripeSubscriptionId: row.stripeSubscriptionId,
+    googleId: row.googleId,
   };
 }
 
@@ -226,6 +228,61 @@ export async function createUser(input: {
   return user;
 }
 
+const TRIAL_MS = TRIAL_DAYS * 24 * 60 * 60 * 1000;
+
+export async function findOrCreateFromGoogle(input: {
+  googleId: string;
+  email: string;
+  name: string;
+}): Promise<SaasUser> {
+  const email = input.email.trim().toLowerCase();
+  const name = input.name.trim() || email.split("@")[0]!;
+  if (cx.convexConfigured()) {
+    const id = await cx.convexUpsertGoogle({
+      email,
+      name,
+      googleId: input.googleId,
+      passwordHash: hashPassword(randomBytes(32).toString("hex")),
+      createdAt: Date.now(),
+      subscriptionStatus: "trialing",
+      subscriptionEndsAt: Date.now() + TRIAL_MS,
+    });
+    const row = await cx.convexFindUserById(id);
+    if (!row) throw new Error("Google user missing after upsert");
+    return fromConvexRow(row);
+  }
+
+  const users = loadUsers();
+  const byGoogle = users.find((u) => u.googleId === input.googleId);
+  if (byGoogle) {
+    if (name && name !== byGoogle.name) {
+      byGoogle.name = name;
+      saveUsers(users);
+    }
+    return byGoogle;
+  }
+  const byEmail = users.find((u) => u.email === email);
+  if (byEmail) {
+    byEmail.googleId = input.googleId;
+    if (name) byEmail.name = name;
+    saveUsers(users);
+    return byEmail;
+  }
+  const user: SaasUser = {
+    id: newId(),
+    email,
+    name,
+    passwordHash: hashPassword(randomBytes(32).toString("hex")),
+    createdAt: Date.now(),
+    subscriptionStatus: "trialing",
+    subscriptionEndsAt: Date.now() + TRIAL_MS,
+    googleId: input.googleId,
+  };
+  users.push(user);
+  saveUsers(users);
+  return user;
+}
+
 export async function authenticate(email: string, password: string): Promise<SaasUser> {
   const user = await findUserByEmail(email);
   if (!user || !verifyPassword(password, user.passwordHash)) {
@@ -263,10 +320,14 @@ export async function activateLocalSubscription(userId: string): Promise<SaasUse
 export function issueSession(res: ServerResponse, userId: string) {
   const token = sign({ uid: userId, exp: Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000 });
   const secure = process.env.OMB_COOKIE_SECURE === "1" ? "; Secure" : "";
-  res.setHeader(
-    "set-cookie",
-    `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${secure}`,
-  );
+  const cookie = `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${secure}`;
+  const prev = res.getHeader("set-cookie");
+  if (!prev) {
+    res.setHeader("set-cookie", cookie);
+    return;
+  }
+  const list = Array.isArray(prev) ? prev.map(String) : [String(prev)];
+  res.setHeader("set-cookie", [...list, cookie]);
 }
 
 export function clearSession(res: ServerResponse) {

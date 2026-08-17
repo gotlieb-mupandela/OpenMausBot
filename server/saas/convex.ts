@@ -33,6 +33,7 @@ export type ConvexUserRow = {
   subscriptionEndsAt: number | null;
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;
+  googleId?: string;
 };
 
 export async function convexFindUserByEmail(email: string): Promise<ConvexUserRow | null> {
@@ -65,6 +66,22 @@ export async function convexCreateUser(input: {
 }): Promise<Id<"users">> {
   const client = convexClient();
   return await client.mutation(api.users.create, {
+    secret: secret(),
+    ...input,
+  });
+}
+
+export async function convexUpsertGoogle(input: {
+  email: string;
+  name: string;
+  googleId: string;
+  passwordHash: string;
+  createdAt: number;
+  subscriptionStatus: ConvexUserRow["subscriptionStatus"];
+  subscriptionEndsAt: number | null;
+}): Promise<Id<"users">> {
+  const client = convexClient();
+  return await client.mutation(api.users.upsertGoogle, {
     secret: secret(),
     ...input,
   });

@@ -7,6 +7,15 @@ import { useStore, type Bot, type InstanceInfo } from "@/state/store";
 import { ProviderMark } from "./ProviderIcons";
 import { cn } from "@/lib/cn";
 
+function friendlyReason(reason?: string): string {
+  const r = (reason ?? "").toLowerCase();
+  if (!reason) return "Temporarily unavailable";
+  if (/api key|ollama|app settings|config\.json|env|token|ak_|ck_|composio|box\.ascii/i.test(r)) {
+    return "Temporarily unavailable";
+  }
+  return reason;
+}
+
 function modelLabel(instance: InstanceInfo | undefined, model: string): string {
   return instance?.models.options.find((o) => o.id === model)?.label ?? model;
 }
@@ -36,7 +45,7 @@ function PickerBody({
               onClick={() => setRailId(instance.instanceId)}
               title={
                 unavailable
-                  ? `${instance.displayName} — ${instance.snapshot.reason ?? "unavailable"}`
+                  ? `${instance.displayName} — ${friendlyReason(instance.snapshot.reason)}`
                   : instance.displayName
               }
               className={cn(
@@ -59,7 +68,7 @@ function PickerBody({
               <div className="truncate text-[11px] text-ink-secondary">
                 {railInstance.snapshot.state === "available"
                   ? (railInstance.snapshot.version ?? "ready")
-                  : (railInstance.snapshot.reason ?? "unavailable")}
+                  : friendlyReason(railInstance.snapshot.reason)}
               </div>
             </div>
             {railInstance.models.options.map((option) => {
@@ -92,7 +101,7 @@ function PickerBody({
           </>
         ) : (
           <div className="px-2 py-3 text-[13px] text-ink-secondary">
-            No providers — is the server running?
+            No models yet — try again in a moment.
           </div>
         )}
       </div>

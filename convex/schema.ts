@@ -37,7 +37,8 @@ export default defineSchema({
     subscriptionEndsAt: v.union(v.number(), v.null()),
     stripeCustomerId: v.optional(v.string()),
     stripeSubscriptionId: v.optional(v.string()),
-  }).index("by_email", ["email"]),
+    googleId: v.optional(v.string()),
+  }).index("by_email", ["email"]).index("by_googleId", ["googleId"]),
 
   bots: defineTable({
     userId: v.id("users"),

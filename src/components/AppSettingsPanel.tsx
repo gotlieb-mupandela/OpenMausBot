@@ -1,6 +1,4 @@
-// App-level settings, in the right-side slot: who you are + credentials
-// shared by all bots. Per-bot settings (name, persona, model, computer)
-// live in SettingsPanel; contextual Box-token entry stays in ComputerPanel.
+// App-level settings: profile, subscription, and (desktop only) credentials.
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useStore } from "@/state/store";
@@ -159,8 +157,7 @@ export function AppSettingsPanel({
                   : ""}
               </div>
               <p className="mt-2 text-[13px] text-ink-secondary">
-                Models are hosted for you — no API keys to manage. Stripe Checkout plugs in when
-                STRIPE_SECRET_KEY is set.
+                AI, plugins, and a shared computer are included with your plan.
               </p>
               <button
                 onClick={() => void activate()}

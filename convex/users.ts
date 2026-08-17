@@ -63,6 +63,60 @@ export const create = mutation({
   },
 });
 
+export const upsertGoogle = mutation({
+  args: {
+    secret: v.string(),
+    email: v.string(),
+    name: v.string(),
+    googleId: v.string(),
+    passwordHash: v.string(),
+    createdAt: v.number(),
+    subscriptionStatus: v.union(
+      v.literal("trialing"),
+      v.literal("active"),
+      v.literal("past_due"),
+      v.literal("canceled"),
+      v.literal("none"),
+    ),
+    subscriptionEndsAt: v.union(v.number(), v.null()),
+  },
+  handler: async (ctx, args) => {
+    assertHarness(args.secret);
+    const email = args.email.trim().toLowerCase();
+    const byGoogle = await ctx.db
+      .query("users")
+      .withIndex("by_googleId", (q) => q.eq("googleId", args.googleId))
+      .unique();
+    if (byGoogle) {
+      const patch: { name?: string; email?: string } = {};
+      if (args.name && args.name !== byGoogle.name) patch.name = args.name;
+      if (email !== byGoogle.email) patch.email = email;
+      if (Object.keys(patch).length) await ctx.db.patch(byGoogle._id, patch);
+      return byGoogle._id;
+    }
+    const byEmail = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", email))
+      .unique();
+    if (byEmail) {
+      await ctx.db.patch(byEmail._id, {
+        googleId: args.googleId,
+        ...(args.name ? { name: args.name } : {}),
+      });
+      return byEmail._id;
+    }
+    return await ctx.db.insert("users", {
+      email,
+      name: args.name,
+      passwordHash: args.passwordHash,
+      createdAt: args.createdAt,
+      subscriptionStatus: args.subscriptionStatus,
+      subscriptionEndsAt: args.subscriptionEndsAt,
+      googleId: args.googleId,
+    });
+  },
+});
+
 export const patchSubscription = mutation({
   args: {
     secret: v.string(),

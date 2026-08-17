@@ -228,7 +228,7 @@ export function PluginsPanel({ saasMode = false }: { saasMode?: boolean }) {
         {!configured && (
           <div className="mt-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[13px] text-warning">
             {saasMode ? (
-              <>Plugins aren&apos;t enabled yet — the host needs to set COMPOSIO_API_KEY on the server.</>
+              <>Apps aren&apos;t available right now. You can still chat with your bots.</>
             ) : (
               <>
                 Paste a Composio project API key (
@@ -249,7 +249,13 @@ export function PluginsPanel({ saasMode = false }: { saasMode?: boolean }) {
           </div>
         )}
 
-        {error && <div className="mt-2 text-[13px] text-danger">{error}</div>}
+        {error && (
+          <div className="mt-2 text-[13px] text-danger">
+            {saasMode && /api key|composio|ak_|ck_/i.test(error)
+              ? "Couldn't load apps. Try again in a moment."
+              : error}
+          </div>
+        )}
 
         <div className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto">
           {cards === null ? (

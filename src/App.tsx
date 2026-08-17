@@ -31,7 +31,7 @@ function Shell({
       <UpdateBanner />
       {saasUser && <BillingBanner user={saasUser} onUpdated={onSaasUser} />}
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
-        <Sidebar />
+        <Sidebar saasMode={saasMode} />
         {bot ? (
           <ChatView bot={bot} canChat={saasUser ? saasUser.canChat : true} />
         ) : (
@@ -60,7 +60,7 @@ function Shell({
             )}
           </main>
         )}
-        {state.settingsOpen && bot && <SettingsPanel bot={bot} />}
+        {state.settingsOpen && bot && <SettingsPanel bot={bot} saasMode={saasMode} />}
         {state.computerOpen && bot && <ComputerPanel bot={bot} saasMode={saasMode} />}
         {state.appSettingsOpen && <AppSettingsPanel saasUser={saasUser} onSaasUser={onSaasUser} />}
         {state.pluginsOpen && <PluginsPanel saasMode={saasMode} />}
@@ -77,6 +77,7 @@ export default function App() {
   const [saasUser, setSaasUser] = useState<SaasUser | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [saasBootError, setSaasBootError] = useState<string | null>(null);
+  const [googleAuth, setGoogleAuth] = useState(false);
   const [gated, setGated] = useState(() => !emailGateDone());
 
   useEffect(() => {
@@ -92,6 +93,8 @@ export default function App() {
           if (!alive) return;
           setSaasMode(true);
           setSaasBootError(null);
+          const mode = (await modeRes.json().catch(() => ({}))) as { googleAuth?: boolean };
+          if (alive) setGoogleAuth(Boolean(mode.googleAuth));
           const me = await fetch("/api/auth/me", { credentials: "include" });
           if (me.ok) {
             const data = await me.json();
@@ -153,7 +156,7 @@ export default function App() {
   }
 
   if (saasMode && !saasUser) {
-    return <AuthScreen onAuthed={setSaasUser} />;
+    return <AuthScreen onAuthed={setSaasUser} googleAuth={googleAuth} />;
   }
 
   return (

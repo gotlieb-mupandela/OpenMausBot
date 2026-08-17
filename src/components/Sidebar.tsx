@@ -52,7 +52,15 @@ interface MenuState {
   y: number;
 }
 
-function BotContextMenu({ menu, onClose }: { menu: MenuState; onClose: () => void }) {
+function BotContextMenu({
+  menu,
+  onClose,
+  saasMode,
+}: {
+  menu: MenuState;
+  onClose: () => void;
+  saasMode?: boolean;
+}) {
   const { state, dispatch } = useStore();
   const { closeList } = useMobileNav();
   const bot = state.bots.find((b) => b.id === menu.botId);
@@ -131,10 +139,14 @@ function BotContextMenu({ menu, onClose }: { menu: MenuState; onClose: () => voi
         item(<Copy size={16} className="text-ink-secondary" />, "Duplicate", () =>
           dispatch({ type: "duplicateBot", botId: bot.id }),
         ),
-        divider("d2"),
-        item(<ClipboardCopy size={16} className="text-ink-secondary" />, "Copy conversation ID", () => {
-          void navigator.clipboard?.writeText(bot.threadId);
-        }),
+        ...(saasMode
+          ? []
+          : [
+              divider("d2"),
+              item(<ClipboardCopy size={16} className="text-ink-secondary" />, "Copy conversation ID", () => {
+                void navigator.clipboard?.writeText(bot.threadId);
+              }),
+            ]),
         divider("d3"),
         item(<EyeOff size={16} className="text-ink-secondary" />, "Hide from sidebar", () =>
           dispatch({ type: "updateBot", botId: bot.id, patch: { hidden: true } }),
@@ -200,7 +212,7 @@ function BotListItem({ bot, onMenu }: { bot: Bot; onMenu: (menu: MenuState) => v
   );
 }
 
-export function Sidebar() {
+export function Sidebar({ saasMode = false }: { saasMode?: boolean }) {
   const { state, dispatch } = useStore();
   const { listOpen, closeList } = useMobileNav();
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -234,6 +246,8 @@ export function Sidebar() {
         style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
       >
         {isElectron ? (
+          <div className="hidden w-14 md:block" />
+        ) : saasMode ? (
           <div className="hidden w-14 md:block" />
         ) : (
           <div className="hidden items-center gap-2 md:flex">
@@ -312,7 +326,7 @@ export function Sidebar() {
         </div>
       </div>
 
-      {menu && <BotContextMenu menu={menu} onClose={() => setMenu(null)} />}
+      {menu && <BotContextMenu menu={menu} onClose={() => setMenu(null)} saasMode={saasMode} />}
     </aside>
   );
 }

@@ -19,6 +19,7 @@ import { ProviderRegistry } from "./harness/registry.ts";
 import { mentionedBots, type Message } from "./store.ts";
 import { SAAS_MODE, SAAS_HOST, SAAS_PLAN } from "./saas/mode.ts";
 import * as auth from "./saas/auth.ts";
+import * as google from "./saas/google.ts";
 import { TenantStores } from "./saas/tenants.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
@@ -694,6 +695,33 @@ const server = createServer(async (req, res) => {
         auth.issueSession(res, user.id);
         return json(res, 200, { user: auth.toPublic(user), mode: "saas" });
       }
+      if (method === "GET" && path === "/api/auth/google") {
+        try {
+          google.startGoogleLogin(res);
+        } catch (e) {
+          const status = (e as { status?: number })?.status ?? 500;
+          return json(res, status, { error: e instanceof Error ? e.message : String(e) });
+        }
+        return;
+      }
+      if (method === "GET" && path === "/api/auth/google/callback") {
+        try {
+          const profile = await google.googleProfileFromCallback(req);
+          const user = await auth.findOrCreateFromGoogle(profile);
+          await tenants.touch(user.id);
+          google.clearOauthCookie(res);
+          auth.issueSession(res, user.id);
+          res.writeHead(302, { location: `${google.publicOrigin()}/` });
+          return res.end();
+        } catch (e) {
+          google.clearOauthCookie(res);
+          const msg = e instanceof Error ? e.message : "Google sign-in failed";
+          res.writeHead(302, {
+            location: `${google.publicOrigin()}/?auth_error=${encodeURIComponent(msg)}`,
+          });
+          return res.end();
+        }
+      }
       if (method === "POST" && path === "/api/auth/logout") {
         auth.clearSession(res);
         return json(res, 200, { ok: true });
@@ -708,7 +736,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (SAAS_MODE && method === "GET" && path === "/api/saas") {
-      return json(res, 200, { mode: "saas", plan: SAAS_PLAN });
+      return json(res, 200, { mode: "saas", plan: SAAS_PLAN, googleAuth: google.googleConfigured() });
     }
 
     // ── resolve tenant store ───────────────────────────────────────────
@@ -934,7 +962,15 @@ const server = createServer(async (req, res) => {
 
     // ── provider instances (model picker) ──
     if (method === "GET" && path === "/api/instances") {
-      return json(res, 200, { instances: await registry.describe() });
+      const instances = await registry.describe();
+      if (!SAAS_MODE) return json(res, 200, { instances });
+      return json(res, 200, {
+        instances: instances.map((row) =>
+          row.snapshot.state === "unavailable"
+            ? { ...row, snapshot: { ...row.snapshot, reason: "Temporarily unavailable" } }
+            : row,
+        ),
+      });
     }
 
     // ── app config (API keys — never echoed back, booleans only) ──
@@ -944,11 +980,9 @@ const server = createServer(async (req, res) => {
     if ((method === "PUT" || method === "PATCH") && path === "/api/config") {
       const body = await readBody(req);
       const patch: Record<string, object> = {};
-      // SaaS: platform owns model keys (ollama/xai/box). Profile + Composio
-      // Connect (ck_…) / catalog (ak_…) keys are still pasteable so plugins
-      // work without hand-editing .env — saveConfig hot-reloads into `cfg`.
+      // SaaS: platform owns all provider keys. Users may only update profile.
       const allowed = SAAS_MODE
-        ? (["profile", "composio"] as const)
+        ? (["profile"] as const)
         : (["xai", "ollama", "composio", "box", "profile"] as const);
       for (const key of allowed) {
         if (body[key] && typeof body[key] === "object") patch[key] = body[key];
@@ -982,7 +1016,7 @@ const server = createServer(async (req, res) => {
       if (!Object.keys(patch).length) {
         return json(res, 400, {
           error: SAAS_MODE
-            ? "nothing to save — model keys are platform-hosted; use profile or composio"
+            ? "nothing to save — only your profile can be updated here"
             : "nothing to save",
         });
       }

@@ -29,7 +29,7 @@ function Field({
 const inputCls =
   "w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2.5 text-[15px] text-ink placeholder:text-ink-secondary focus:outline-none focus:border-hairline";
 
-export function SettingsPanel({ bot }: { bot: Bot }) {
+export function SettingsPanel({ bot, saasMode = false }: { bot: Bot; saasMode?: boolean }) {
   const { state, dispatch } = useStore();
   const patch = (
     p: Partial<
@@ -162,10 +162,12 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
           <div className="rounded-xl bg-card p-4">
             <div className="text-[15px] font-medium text-ink">Computer</div>
             <div className="mt-0.5 text-[13px] text-ink-secondary">
-              Where this bot's computer runs{bot.computer ? "" : " (currently: auto)"}
+              {saasMode
+                ? "Bots share one cloud computer"
+                : `Where this bot's computer runs${bot.computer ? "" : " (currently: auto)"}`}
             </div>
             <div className="mt-3 flex overflow-hidden rounded-lg border border-hairline/40">
-              {(["cloud", "local", "off"] as const).map((mode, i) => (
+              {(saasMode ? (["cloud", "off"] as const) : (["cloud", "local", "off"] as const)).map((mode, i) => (
                 <button
                   key={mode}
                   onClick={() => patch({ computer: mode })}

@@ -184,9 +184,9 @@ export function ComputerPanel({ bot, saasMode = false }: { bot: Bot; saasMode?: 
     checking: "Checking…",
     starting: shared || saasMode ? "Starting your team's computer…" : "Starting your bot's computer…",
     unconfigured: saasMode
-      ? "Cloud computer isn't available yet — the host needs BOX_TOKEN"
+      ? "The team computer isn't ready yet"
       : "No cloud computer configured",
-    "local-unavailable": "Local preview needs the desktop app — run pnpm dev:desktop",
+    "local-unavailable": "This Mac preview is only in the desktop app",
     off: "This bot's computer is off",
     error: "Couldn't reach the computer",
   };
@@ -256,6 +256,9 @@ export function ComputerPanel({ bot, saasMode = false }: { bot: Bot; saasMode?: 
         {error && (
           <div className="mt-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger">
             {(() => {
+              if (saasMode) {
+                return "Couldn't start the computer. Try again in a moment.";
+              }
               const billingMatch = error.match(/https:\/\/box\.ascii\.dev[^\s]*/);
               if (!billingMatch) return error;
               const url = billingMatch[0];
@@ -271,7 +274,7 @@ export function ComputerPanel({ bot, saasMode = false }: { bot: Bot; saasMode?: 
             })()}
           </div>
         )}
-        {phase === "error" && /billing|402|subscription/i.test(error ?? "") && (
+        {phase === "error" && !saasMode && /billing|402|subscription/i.test(error ?? "") && (
           <a
             href="https://box.ascii.dev/box/dashboard?tab=billing&box_api_url=https%3A%2F%2Fascii.dev"
             target="_blank"
@@ -296,8 +299,7 @@ export function ComputerPanel({ bot, saasMode = false }: { bot: Bot; saasMode?: 
         )}
         {phase === "unconfigured" && saasMode && (
           <div className="mt-3 rounded-xl bg-card p-4 text-[13px] text-ink-secondary">
-            Your host needs a platform <code className="rounded bg-raised px-1">BOX_TOKEN</code> so every
-            teammate can share one cloud computer.
+            The team computer isn&apos;t available yet. You can still chat with your bots.
           </div>
         )}
 
