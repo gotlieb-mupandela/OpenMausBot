@@ -115,7 +115,12 @@ async function backendJson(
   return json;
 }
 
-/** Resolve or create a Composio-managed auth config for the toolkit slug. */
+function authSchemeOf(config: any): string {
+  return String(config?.auth_scheme ?? config?.authScheme ?? config?.auth_config?.auth_scheme ?? "").toUpperCase();
+}
+
+/** Resolve or create a Composio-managed auth config for the toolkit slug.
+ * Prefer OAuth when a toolkit offers both OAuth and API keys (WhatsApp). */
 async function ensureAuthConfigId(apiKey: string, slug: string): Promise<string> {
   const listed = await backendJson(
     apiKey,
@@ -123,9 +128,22 @@ async function ensureAuthConfigId(apiKey: string, slug: string): Promise<string>
     `/auth_configs?toolkit_slug=${encodeURIComponent(slug)}&limit=10`,
   );
   const items: any[] = listed?.items ?? listed?.data ?? [];
-  const existing = items.find((c) => c?.id && !c?.is_disabled);
-  if (existing?.id) return String(existing.id);
+  const live = items.filter((c) => c?.id && !c?.is_disabled);
+  const oauth = live.find((c) => /OAUTH/.test(authSchemeOf(c)));
+  if (oauth?.id) return String(oauth.id);
+  if (live[0]?.id) return String(live[0].id);
 
+  const body = {
+    toolkit: { slug },
+    auth_config: { type: "use_composio_managed_auth", authScheme: "OAUTH2" },
+  };
+  try {
+    const created = await backendJson(apiKey, "POST", "/auth_configs", body);
+    const id = created?.auth_config?.id ?? created?.id ?? created?.data?.id;
+    if (id) return String(id);
+  } catch {
+    /* some toolkits reject an explicit scheme — retry default managed auth */
+  }
   const created = await backendJson(apiKey, "POST", "/auth_configs", {
     toolkit: { slug },
     auth_config: { type: "use_composio_managed_auth" },
@@ -213,6 +231,15 @@ function enrichToolDescription(name: string, description: string): string {
       `${description} ` +
       "Use this for each message id when the list lacks subject/from/snippet. Do not invent message fields."
     ).slice(0, 480);
+  }
+  if (/WHATSAPP_GET_PHONE_NUMBERS/.test(n)) {
+    return `${description} Call this before sending so you have a valid WABA phone number id.`.slice(0, 480);
+  }
+  if (/WHATSAPP_(SEND_MESSAGE|SEND_TEMPLATE_MESSAGE|GET_MESSAGE)/.test(n)) {
+    return `${description} WhatsApp Business only — never invent chats or claim personal WhatsApp is connected.`.slice(
+      0,
+      480,
+    );
   }
   return description.slice(0, 280);
 }
@@ -325,10 +352,11 @@ function scoreToolName(name: string): number {
   }
   let score = 0;
   if (/FETCH_EMAILS|LIST_MESSAGES|FETCH_MESSAGE|SEND_EMAIL|CREATE_EMAIL|REPLY_TO_THREAD/.test(n)) score += 80;
+  if (/WHATSAPP_(SEND_MESSAGE|SEND_TEMPLATE_MESSAGE|GET_PHONE_NUMBERS|GET_MESSAGE_HISTORY)/.test(n)) score += 80;
   if (/FETCH|LIST|SEARCH|FIND|GET_|READ|SEND|CREATE|INSERT|UPDATE|WRITE|REPLY|FORWARD|ARCHIVE|EVENTS|MESSAGES|EMAILS|THREADS/.test(n)) {
     score += 40;
   }
-  if (/EMAIL|MESSAGE|INBOX|THREAD|EVENT|CALENDAR|FILE|DOC|SHEET|ISSUE|CHANNEL|CHAT|DRIVE/.test(n)) score += 12;
+  if (/EMAIL|MESSAGE|INBOX|THREAD|EVENT|CALENDAR|FILE|DOC|SHEET|ISSUE|CHANNEL|CHAT|DRIVE|WHATSAPP/.test(n)) score += 12;
   if (/_DELETE$|_REMOVE$/.test(n) && !/EVENT|MESSAGE|EMAIL|FILE|TASK|ISSUE|DRAFT/.test(n)) score -= 25;
   return score;
 }
@@ -338,11 +366,11 @@ function rankAndCapTools(
   max = MAX_COMPOSIO_TOOLS,
   preferToolkit?: string | null,
 ): OpenAITool[] {
-  const pref = preferToolkit?.toUpperCase().replace(/-/g, "") ?? "";
+  const pref = preferToolkit?.toUpperCase().replace(/[-_]/g, "") ?? "";
   return [...tools]
     .sort((a, b) => {
-      const an = a.function.name.toUpperCase().replace(/-/g, "_");
-      const bn = b.function.name.toUpperCase().replace(/-/g, "_");
+      const an = a.function.name.toUpperCase().replace(/[-_]/g, "");
+      const bn = b.function.name.toUpperCase().replace(/[-_]/g, "");
       const ap = pref && an.startsWith(pref) ? 1000 : 0;
       const bp = pref && bn.startsWith(pref) ? 1000 : 0;
       return bp + scoreToolName(b.function.name) - (ap + scoreToolName(a.function.name));
@@ -407,7 +435,11 @@ export function messageNeedsComputer(text: string): boolean {
 /** Map a user message to a connected-toolkit slug when plugins should handle it. */
 export function messagePluginIntent(text: string): string | null {
   const t = text.toLowerCase();
-  if (/\b(email|e-?mail|gmail|inbox|mail\b|last (email|mail)|unread)\b/.test(t)) return "gmail";
+  // Messaging apps before Gmail — "WhatsApp inbox" used to resolve as email.
+  if (/\b(whats\s*app|whatsapp)\b/.test(t)) return "whatsapp";
+  if (/\b(discord)\b/.test(t)) return "discord";
+  if (/\b(telegram)\b/.test(t)) return "telegram";
+  if (/\b(email|e-?mail|gmail|inbox|mails?|emails?|last (emails?|mails?)|unread)\b/.test(t)) return "gmail";
   // Include common misspellings — "calander" / "calender" used to miss intent and open LIVE DESKTOP.
   if (
     /\b(cal+end?ars?|calanders?|calenders?|schedule|meeting|invite|agenda|events?)\b/.test(t) ||
@@ -423,6 +455,15 @@ export function messagePluginIntent(text: string): string | null {
   if (/\b(google docs?|document)\b/.test(t)) return "googledocs";
   if (/\b(drive|google drive)\b/.test(t)) return "googledrive";
   return null;
+}
+
+/** Map an intent slug onto the actual connected toolkit (whatsapp vs whatsapp_business). */
+export function matchConnectedToolkit(intent: string | null, connected: string[]): string | null {
+  if (!intent) return null;
+  if (connected.includes(intent)) return intent;
+  const compact = (s: string) => s.replace(/[-_]/g, "");
+  const want = compact(intent);
+  return connected.find((s) => compact(s) === want || compact(s).startsWith(want)) ?? intent;
 }
 
 /** ACTIVE connected toolkit slugs for this user (Platform ak_ path).
@@ -488,19 +529,20 @@ async function listPlatformToolsOpenAI(
         .filter(Boolean),
     ),
   ];
+  preferToolkit = matchConnectedToolkit(preferToolkit ?? null, slugs);
   if (preferToolkit && !slugs.includes(preferToolkit)) {
     slugs = [preferToolkit, ...slugs];
   }
   if (!slugs.length) return [];
 
-  // Load the intent toolkit first so Gmail isn't crowded out by Calendar ACL noise.
+  // Load the intent toolkit first so Gmail/WhatsApp aren't crowded out.
   if (preferToolkit && slugs.includes(preferToolkit)) {
     slugs = [preferToolkit, ...slugs.filter((s) => s !== preferToolkit)];
   }
 
   const ranked: OpenAITool[] = [];
   const seen = new Set<string>();
-  for (const slug of slugs.slice(0, 6)) {
+  for (const slug of slugs.slice(0, 8)) {
     try {
       const params = new URLSearchParams({
         toolkit_slug: slug,
@@ -549,10 +591,11 @@ async function executePlatformTool(
   let all = await listConnectedAccounts(apiKey, [], userId).catch(() => []);
   if (!all.length) all = await listConnectedAccounts(apiKey, CURATED_SLUGS, userId).catch(() => []);
   const upper = name.toUpperCase().replace(/-/g, "_");
+  const toolCompact = upper.replace(/_/g, "");
   const match = all.find((a) => {
     if (!/^active$/i.test(a?.status ?? "") || a?.is_disabled) return false;
-    const slug = String(a?.toolkit?.slug ?? "").toUpperCase().replace(/-/g, "");
-    return slug && upper.startsWith(slug);
+    const slugCompact = String(a?.toolkit?.slug ?? "").toUpperCase().replace(/[-_]/g, "");
+    return slugCompact && (upper.startsWith(slugCompact) || toolCompact.startsWith(slugCompact));
   });
   if (match?.id) body.connected_account_id = String(match.id);
   return backendJson(apiKey, "POST", `/tools/execute/${encodeURIComponent(name)}`, body);
@@ -653,8 +696,18 @@ export async function connectionStatus(cfg: ComposioCfg, slugs: string[], userId
   // so status must read the same store (Connect MCP won't see those accounts).
   const apiKey = resolveApiKey(cfg);
   if (apiKey) {
-    const items = await listConnectedAccounts(apiKey, slugs, userId);
-    return statusFromPlatformItems(items, slugs);
+    const requested = await listConnectedAccounts(apiKey, slugs, userId);
+    const all = slugs.length ? await listConnectedAccounts(apiKey, [], userId).catch(() => []) : requested;
+    const byId = new Map<string, any>();
+    for (const a of [...requested, ...all]) {
+      const id = String(a?.id ?? "");
+      if (id) byId.set(id, a);
+    }
+    const items = [...byId.values()];
+    const extra = items
+      .map((a) => String(a?.toolkit?.slug ?? "").toLowerCase())
+      .filter(Boolean);
+    return statusFromPlatformItems(items, [...new Set([...slugs, ...extra])]);
   }
 
   if (resolveConnectKey(cfg)) {
@@ -708,6 +761,24 @@ export async function removeService(cfg: ComposioCfg, slug: string, userId?: str
 
 /** Mint a browser auth link for one service. Returns { url } or throws. */
 export async function authorizeService(cfg: ComposioCfg, slug: string, userId?: string) {
+  try {
+    return await authorizeServiceInner(cfg, slug, userId);
+  } catch (e) {
+    throw friendlyAuthorizeError(slug, e);
+  }
+}
+
+function friendlyAuthorizeError(slug: string, err: unknown): Error {
+  const message = err instanceof Error ? err.message : String(err);
+  if (/whatsapp/i.test(slug) && /missing required|required field|waba|phone.?number|auth_scheme|api.?key/i.test(message)) {
+    return new Error(
+      "WhatsApp needs a WhatsApp Business account (WABA) and Meta OAuth — personal WhatsApp is not supported. Add WhatsApp again and complete the Business login.",
+    );
+  }
+  return err instanceof Error ? err : new Error(message);
+}
+
+async function authorizeServiceInner(cfg: ComposioCfg, slug: string, userId?: string) {
   const callbackUrl = pluginCallbackUrl();
   if (resolveConnectKey(cfg)) {
     const out = await composioTool(cfg, "COMPOSIO_MANAGE_CONNECTIONS", {
@@ -760,6 +831,7 @@ const CURATED: ToolkitCard[] = [
   { slug: "slack", label: "Slack", blurb: "Post updates and read channels", domain: "slack.com", logo: null },
   { slug: "github", label: "GitHub", blurb: "Issues, pull requests, and code", domain: "github.com", logo: null },
   { slug: "gmail", label: "Gmail", blurb: "Read and send email", domain: "gmail.com", logo: null },
+  { slug: "whatsapp", label: "WhatsApp", blurb: "WhatsApp Business messages (not personal WhatsApp)", domain: "whatsapp.com", logo: null },
   { slug: "googlecalendar", label: "Google Calendar", blurb: "Read and create events", domain: "calendar.google.com", logo: null },
   { slug: "youtube", label: "YouTube", blurb: "Channels, videos, and playlists", domain: "youtube.com", logo: null },
   { slug: "googlesheets", label: "Google Sheets", blurb: "Read and update spreadsheets", domain: "sheets.google.com", logo: null },
@@ -785,6 +857,26 @@ const CURATED: ToolkitCard[] = [
 ];
 
 let toolkitCache: { at: number; cards: ToolkitCard[] } | null = null;
+
+function pinPopularToolkits(cards: ToolkitCard[]): ToolkitCard[] {
+  const pins = ["gmail", "whatsapp", "googlecalendar", "slack", "github"];
+  const seen = new Set<string>();
+  const out: ToolkitCard[] = [];
+  for (const slug of pins) {
+    const card = cards.find((c) => c.slug === slug);
+    if (card) {
+      out.push(card);
+      seen.add(slug);
+    }
+  }
+  for (const card of cards) {
+    if (card.slug && !seen.has(card.slug)) {
+      out.push(card);
+      seen.add(card.slug);
+    }
+  }
+  return out;
+}
 
 /**
  * Marketplace catalog. Tries the v3 toolkits API (official names,
@@ -812,8 +904,9 @@ export async function listToolkits(cfg: ComposioCfg): Promise<{ cards: ToolkitCa
             logo: t.meta?.logo ?? t.logo ?? null,
             domain: null,
           }));
-          toolkitCache = { at: Date.now(), cards };
-          return { cards, source: "api" };
+          const pinned = pinPopularToolkits(cards.filter((c) => c.slug));
+          toolkitCache = { at: Date.now(), cards: pinned };
+          return { cards: pinned, source: "api" };
         }
       }
     } catch {

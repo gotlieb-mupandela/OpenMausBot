@@ -411,7 +411,7 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
         .filter((m) => m.role === "user")
         .map((m) => m.text)
         .slice(-8);
-      const pluginIntent = plus ? composio.resolvePluginIntent(text, recentUserTexts) : null;
+      let pluginIntent = plus ? composio.resolvePluginIntent(text, recentUserTexts) : null;
       const explicitComputer = plus && composio.messageNeedsComputer(text);
 
       // Resolve connected apps early so email/calendar turns can skip the desktop.
@@ -429,6 +429,7 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
       }
       if (dispatchAbort.signal.aborted) return;
 
+      pluginIntent = composio.matchConnectedToolkit(pluginIntent, connectedSlugs);
       const pluginCoversIntent = Boolean(pluginIntent && connectedSlugs.includes(pluginIntent));
       // Plugin intents (email/calendar/youtube/…) never get a computer session unless the
       // user explicitly asks for desktop/browser — otherwise GPT-OSS opens Chrome
@@ -561,6 +562,9 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
                   ["googlesheets", "Google Sheets"],
                   ["googledocs", "Google Docs"],
                   ["googledrive", "Google Drive"],
+                  ["whatsapp", "WhatsApp"],
+                  ["discord", "Discord"],
+                  ["telegram", "Telegram"],
                 ] as const
               ).find(([s]) => s === slug);
               return curated?.[1] ?? slug;
@@ -581,6 +585,10 @@ async function startTurn(botId: string, text: string, opts?: { commsDepth?: numb
       const pluginsHint =
         pluginIntent === "gmail"
           ? ` Connected apps: ${connectedLabels.join(", ") || "Gmail"}. The user asked about email — you MUST call GMAIL_FETCH_EMAILS (or GMAIL_LIST_MESSAGES / GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID) with a high maxResults (50–100). If nextPageToken is present, keep paging until you have every message needed. For any row missing subject/from/date, call GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID. NEVER invent emails, NEVER pad with "(same)", "—", or "data not shown". If a field is missing after tools, say so — do not guess. Do NOT open a browser, screenshot, or use the cloud desktop.`
+          : pluginIntent && /whatsapp/.test(pluginIntent)
+            ? pluginCoversIntent
+              ? ` Connected apps: ${connectedLabels.join(", ") || "WhatsApp"}. The user asked about WhatsApp — you MUST use WHATSAPP_* tools (WHATSAPP_GET_PHONE_NUMBERS, WHATSAPP_SEND_MESSAGE, WHATSAPP_GET_MESSAGE_HISTORY). This is WhatsApp Business (WABA), not personal WhatsApp. NEVER invent chats. Do NOT open a browser, screenshot, or use the cloud desktop.`
+              : ` WhatsApp is not connected. Tell the user to open Plugins, add WhatsApp (WhatsApp Business / WABA — personal WhatsApp is not supported), and finish Meta login. Do not invent chats or open the cloud desktop.`
           : pluginIntent && connectedSlugs.includes(pluginIntent)
             ? ` Connected apps (ACTIVE): ${connectedLabels.join(", ") || pluginIntent}. ${pluginIntent} IS connected — never say it is missing. You MUST use the matching Composio ${pluginIntent.toUpperCase()}_* tools now. Do NOT invent missing records. Do NOT open a browser/desktop for this.`
             : pluginCoversIntent

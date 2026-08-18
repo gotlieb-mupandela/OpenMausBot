@@ -15,6 +15,23 @@ interface ToolkitCard {
   domain: string | null;
 }
 
+const STATUS_EXTRA_SLUGS = [
+  "gmail",
+  "github",
+  "notion",
+  "slack",
+  "googlecalendar",
+  "whatsapp",
+  "discord",
+  "telegram",
+];
+
+function extraCardDomain(slug: string): string | null {
+  if (slug === "gmail") return "gmail.com";
+  if (slug.startsWith("whatsapp")) return "whatsapp.com";
+  return null;
+}
+
 function ServiceIcon({ card }: { card: ToolkitCard }) {
   // 0 = official logo, 1 = favicon by domain, 2 = monogram
   const [stage, setStage] = useState(card.logo ? 0 : card.domain ? 1 : 2);
@@ -73,7 +90,7 @@ export function PluginsPanel({ saasMode = false }: { saasMode?: boolean }) {
     const slugs = list.map((c) => c.slug).slice(0, 80);
     // Always include common apps so a just-connected Gmail isn't missed
     // when the catalog page is truncated.
-    for (const extra of ["gmail", "github", "notion", "slack", "googlecalendar"]) {
+    for (const extra of STATUS_EXTRA_SLUGS) {
       if (!slugs.includes(extra)) slugs.push(extra);
     }
     return refreshStatus(slugs);
@@ -89,7 +106,7 @@ export function PluginsPanel({ saasMode = false }: { saasMode?: boolean }) {
         setConfigured(Boolean(r.configured));
         if (r.configured) {
           const slugs = (r.cards ?? []).map((c: ToolkitCard) => c.slug).slice(0, 80);
-          for (const extra of ["gmail", "github", "notion", "slack", "googlecalendar"]) {
+          for (const extra of STATUS_EXTRA_SLUGS) {
             if (!slugs.includes(extra)) slugs.push(extra);
           }
           void refreshStatus(slugs);
@@ -153,7 +170,7 @@ export function PluginsPanel({ saasMode = false }: { saasMode?: boolean }) {
         label: slug.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
         blurb: "Connected",
         logo: null,
-        domain: slug === "gmail" ? "gmail.com" : null,
+        domain: extraCardDomain(slug),
       }));
     return [...fromCatalog, ...extras];
   })();
